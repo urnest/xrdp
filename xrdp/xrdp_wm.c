@@ -1498,6 +1498,7 @@ xrdp_wm_key(struct xrdp_wm *self, int device_flags, int scan_code)
     int msg;
     struct xrdp_key_info *ki;
 
+    printf("%d %d\n", device_flags, scan_code);
     /*g_printf("count %d\n", self->key_down_list->count);*/
     scan_code = scan_code % 128;
 
