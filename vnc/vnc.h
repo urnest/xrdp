@@ -65,6 +65,7 @@ struct vnc
     /* client functions */
     int (*mod_start)(struct vnc *v, int w, int h, int bpp);
     int (*mod_connect)(struct vnc *v);
+    int (*mod_handle_key)(struct vnc *v, int rdpKeyCode, int rdpKeyEvent);
     int (*mod_event)(struct vnc *v, int msg, long param1, long param2,
                      long param3, long param4);
     int (*mod_signal)(struct vnc *v);

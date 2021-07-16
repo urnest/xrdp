@@ -37,6 +37,24 @@
 #include "string_calls.h"
 #include "xrdp_client_info.h"
 
+
+#define X11_VNC_KEY_VALID = 0x01;
+#define X11_VNC_KEY_AUTO_REPEAT = 0x02;
+#define X11_VNC_KEY_IS_DOWN = 0x04;
+
+struct x11vnckey
+{
+  uint8_t attrs; // X11_VNC_KEY_* per rdp keycode
+  uint8_t vncKeyCode; // if appropriate based on keyState
+  uint8_t shiftedVncKeyCode;  // if appropriate based on keyState
+};
+
+struct x11vnc
+{
+  struct vnc _;
+  x11vnckey keys[256];
+};
+
 /* Client-to-server messages */
 enum c2s
 {
@@ -664,12 +682,42 @@ resize_client_from_layout(struct vnc *v,
     return error;
 }
 
-int handleKey(int rdpKeyCode, int rdpKeyEvent)
+static void assert_less(int a, int b){
+  if (!a<b){
+    abort();
+  }
+}
+static void assert_greater_equal(int a, int b){
+  if (!a>=b){
+    abort();
+  }
+}
+
+static int sendVncKey(struct vnc *v, int vncKeyCode, int pressed)
 {
+  int error;
+  init_stream(s, 8192);
+  out_uint8(s, C2S_KEY_EVENT);
+  out_uint8(s, pressed); /* down flag */
+  out_uint8s(s, 2);
+  out_uint32_be(s, vncKeyCode);
+  s_mark_end(s);
+  error = lib_send_copy(v, s);
+  return error;
+}
+
+int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
+{
+  static const int KEY_PRESSED=1;
+  static const int KEY_RELEASED=0;
+
+  struct x11vnc* v((struct x11vnc*)v_);
+  struct x11vnckey* keys(v->keys);
   int keyState;
   int vncKeyCode;
-  int const shiftIsDown = keys[42] & KEY_IS_DOWN;
+  const int shiftIsDown = keys[42] & KEY_IS_DOWN;
   int status;
+  const int direction = rdpKeyEvent==32768 ? KEY_RELEASED : KEY_PRESSED;
   assert_less(rdpKeyCode, 256);
   assert_greater_equal(rdpKeyCode, 0);
   keyState = keys[rdpKeyCode].attrs;
@@ -688,9 +736,9 @@ int handleKey(int rdpKeyCode, int rdpKeyEvent)
   {
     if (direction == KEY_PRESSED)
     {
-      status=sendVncKey(vncKeyCode, KEY_PRESSED);
+      status=sendVncKey(v_, vncKeyCode, KEY_PRESSED);
       if (status == 0){
-        status=sendVncKey(vncKeyCode, KEY_RELEASED);
+        status=sendVncKey(v_, vncKeyCode, KEY_RELEASED);
       }
     }
   }
@@ -698,12 +746,12 @@ int handleKey(int rdpKeyCode, int rdpKeyEvent)
   {
     if ((direction == KEY_PRESSED) && (!keyState & KEY_IS_DOWN))
     {
-      status = sendVncKey(vncKeyCode, KEY_PRESSED);
+      status = sendVncKey(v_, vncKeyCode, KEY_PRESSED);
       keys[rdpKeyCode].attrs |= KEY_IS_DOWN;
     }
     else if ((direction == KEY_RELEASED) && (keyState & KEY_IS_DOWN))
     {
-      status = sendVncKey(vncKeyCode, KEY_RELEASED);
+      status = sendVncKey(v_, vncKeyCode, KEY_RELEASED);
       keys[rdpKeyCode].attrs &= ~KEY_IS_DOWN;
     }
   }
@@ -755,38 +803,7 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
     }
     else if ((msg >= 15) && (msg <= 16)) /* key events */
     {
-        key = param2;
-
-        if (key > 0)
-        {
-            if (key == 65027) /* altgr */
-            {
-                if (v->shift_state)
-                {
-                    /* fix for mstsc sending left control down with altgr */
-                    init_stream(s, 8192);
-                    out_uint8(s, C2S_KEY_EVENT);
-                    out_uint8(s, 0); /* down flag */
-                    out_uint8s(s, 2);
-                    out_uint32_be(s, 65507); /* left control */
-                    s_mark_end(s);
-                    lib_send_copy(v, s);
-                }
-            }
-
-            init_stream(s, 8192);
-            out_uint8(s, C2S_KEY_EVENT);
-            out_uint8(s, msg == 15); /* down flag */
-            out_uint8s(s, 2);
-            out_uint32_be(s, key);
-            s_mark_end(s);
-            error = lib_send_copy(v, s);
-
-            if (key == 65507) /* left control */
-            {
-                v->shift_state = msg == 15;
-            }
-        }
+      // see handleKey
     }
     else if (msg >= 100 && msg <= 110) /* mouse events */
     {
@@ -2540,26 +2557,21 @@ lib_mod_server_monitor_full_invalidate(struct vnc *v, int param1, int param2)
     return 0;
 }
 
-#define X11_VNC_KEY_VALID = 0x01;
-#define X11_VNC_KEY_AUTO_REPEAT = 0x02;
-#define X11_VNC_KEY_IS_DOWN = 0x04;
-
-#define X11_VNC_KEY_PRESSED = 16384
-#define X11_VNC_KEY_RELEASED = 32768
-
 /******************************************************************************/
 tintptr EXPORT_CC
 mod_init(void)
 {
-    struct vnc *v;
+    struct x11vnc *v;
     struct x11vnckey* keys;
-    v = (struct vnc *)g_malloc(sizeof(struct vnc), 1);
+    
+    v = (struct x11vnc *)g_malloc(sizeof(struct x11vnc), 1);
     /* set client functions */
-    v->size = sizeof(struct vnc);
+    v->size = sizeof(struct x11vnc);
     v->version = CURRENT_MOD_VER;
     v->handle = (tintptr) v;
     v->mod_connect = lib_mod_connect;
     v->mod_start = lib_mod_start;
+    v->mod_handle_key = lib_mod_handle_key;
     v->mod_event = lib_mod_event;
     v->mod_signal = lib_mod_signal;
     v->mod_end = lib_mod_end;
@@ -2577,42 +2589,100 @@ mod_init(void)
     bzero(&v->keys[0], sizeof(v->keys)*sizeof(v->keys[0]));
     keys=&v->keys[0];
 
+    const int valid=X11_VNC_KEY_VALID;
+    
     //a-z
-    keys[30] = { X11_VNC_KEY_AUTO_REPEAT, 38 };
-    keys[48] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[46] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[32] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[18] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[33] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[34] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[35] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[23] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[36] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[37] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[38] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[50] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[49] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[24] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[25] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[16] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[19] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[31] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[20] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[22] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[47] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[17] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[45] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[21] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
-    keys[44] = { X11_VNC_KEY_AUTO_REPEAT, REVISIT };
+    keys[30] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0061 };
+    keys[48] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0062 };
+    keys[46] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0063 };
+    keys[32] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0064 };
+    keys[18] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0065 };
+    keys[33] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0066 };
+    keys[34] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0067 };
+    keys[35] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0068 };
+    keys[23] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0069 };
+    keys[36] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006a };
+    keys[37] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006b };
+    keys[38] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006c };
+    keys[50] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006d };
+    keys[49] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006e };
+    keys[24] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006f };
+    keys[25] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0070 };
+    keys[16] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0071 };
+    keys[19] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0072 };
+    keys[31] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0073 };
+    keys[20] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0074 };
+    keys[22] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0075 };
+    keys[47] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0076 };
+    keys[17] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0077 };
+    keys[45] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0078 };
+    keys[21] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0079 };
+    keys[44] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x007a };
 
     // 0-9
+    keys[11] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0030 };
+    keys[2] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0031 };
+    keys[3] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0032 };
+    keys[4] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0033 };
+    keys[5] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0034 };
+    keys[6] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0035 };
+    keys[7] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0036 };
+    keys[8] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0037 };
+    keys[9] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0038 };
+    keys[10] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0039 };
     // F1-F12
+    keys[59] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbe, 0xffbe };
+    keys[60] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbf, 0xffbf };
+    keys[61] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc0, 0xffc0 };
+    keys[62] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc1, 0xffc1 };
+    keys[63] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc2, 0xffc2 };
+    keys[64] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc3, 0xffc3 };
+    keys[65] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc4, 0xffc4 };
+    keys[66] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc5, 0xffc5 };
+    keys[67] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc6, 0xffc6 };
+    keys[68] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc7, 0xffc7 };
+    keys[87] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc8, 0xffc8 };
+    keys[88] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc9, 0xffc9 };
     // mods
+    // shift, ctrl, alt
+    keys[42] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe1, 0xffe1 };
+    keys[29] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe3, 0xffe3 };
+    keys[56] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe9, 0xffe9 };
+    
     // ETC esc, tab, \,./;'[]-=`
+    keys[1] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b };
+    keys[15] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff09, 0xff09 };
+    keys[43] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005c }; // backslash
+    keys[51] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002c }; // ,
+    keys[52] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002e }; // .
+    keys[53] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002f }; // /
+    keys[39] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003b }; // ;
+    keys[40] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0027 }; // '
+    keys[26] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005b }; // [
+    keys[27] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005d }; // [
+    keys[12] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002d }; // -
+    keys[13] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d }; // =
+    keys[41] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d }; // `
+
+    
     // del, back-space, home, end
+    keys[83] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff9f, 0xff9f }; // del
+    keys[14] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff08, 0xff08 }; // backspace
+    keys[71] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff95, 0xff95 }; // home
+    keys[79] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff9c, 0xff9c }; // end
     // pgup, pgdown
+    keys[73] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff55, 0xff55 };
+    keys[81] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff56, 0xff56 };
     // up,right,down,left
+    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff52, 0xff52 };
+    keys[77] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff53, 0xff53 };
+    keys[80] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff54, 0xff54 };
+    keys[75] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff51, 0xff51 };
     // num-lock, sysrq, scroll lock, break
+    keys[69] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff7f, 0xff7f };
+    keys[70] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff15 };
+    keys[71] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff14, 0xff14 };
+    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff6b };
     return (tintptr) v;
 }
 
