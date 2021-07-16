@@ -10,11 +10,10 @@ AM_CPPFLAGS += -DXRDP_DEBUG
 endif
 
 module_LTLIBRARIES = \
-  libvnc.la
+  libxrdpx11vnc.la
 
 libvnc_la_SOURCES = \
-  vnc.c \
-  vnc.h
+  vnc.c
 
 libvnc_la_LIBADD = \
   $(top_builddir)/common/libcommon.la

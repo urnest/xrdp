@@ -2592,44 +2592,44 @@ mod_init(void)
     const int valid=X11_VNC_KEY_VALID;
     
     //a-z
-    keys[30] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0061 };
-    keys[48] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0062 };
-    keys[46] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0063 };
-    keys[32] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0064 };
-    keys[18] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0065 };
-    keys[33] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0066 };
-    keys[34] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0067 };
-    keys[35] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0068 };
-    keys[23] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0069 };
-    keys[36] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006a };
-    keys[37] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006b };
-    keys[38] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006c };
-    keys[50] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006d };
-    keys[49] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006e };
-    keys[24] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006f };
-    keys[25] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0070 };
-    keys[16] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0071 };
-    keys[19] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0072 };
-    keys[31] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0073 };
-    keys[20] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0074 };
-    keys[22] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0075 };
-    keys[47] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0076 };
-    keys[17] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0077 };
-    keys[45] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0078 };
-    keys[21] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0079 };
-    keys[44] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x007a };
+    keys[30] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0061, 0x0041 };
+    keys[48] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0062, 0x0042 };
+    keys[46] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0063, 0x0043 };
+    keys[32] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0064, 0x0044 };
+    keys[18] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0065, 0x0045 };
+    keys[33] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0066, 0x0046 };
+    keys[34] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0067, 0x0047 };
+    keys[35] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0068, 0x0048 };
+    keys[23] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0069, 0x0049 };
+    keys[36] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006a, 0x004a };
+    keys[37] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006b, 0x004b };
+    keys[38] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006c, 0x004c };
+    keys[50] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006d, 0x004d };
+    keys[49] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006e, 0x004e };
+    keys[24] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006f, 0x004f };
+    keys[25] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0070, 0x0050 };
+    keys[16] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0071, 0x0051 };
+    keys[19] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0072, 0x0052 };
+    keys[31] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0073, 0x0053 };
+    keys[20] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0074, 0x0054 };
+    keys[22] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0075, 0x0055 };
+    keys[47] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0076, 0x0056 };
+    keys[17] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0077, 0x0057 };
+    keys[45] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0078, 0x0058 };
+    keys[21] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0079, 0x0059 };
+    keys[44] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x007a, 0x005a };
 
     // 0-9
-    keys[11] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0030 };
-    keys[2] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0031 };
-    keys[3] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0032 };
-    keys[4] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0033 };
-    keys[5] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0034 };
-    keys[6] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0035 };
-    keys[7] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0036 };
-    keys[8] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0037 };
-    keys[9] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0038 };
-    keys[10] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0039 };
+    keys[11] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0030, 0x0029 };
+    keys[ 2] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0031, 0x0021 };
+    keys[ 3] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0032, 0x0040 };
+    keys[ 4] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0033, 0x0023 };
+    keys[ 5] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0034, 0x0024 };
+    keys[ 6] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0035, 0x0025 };
+    keys[ 7] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0036, 0x005e };
+    keys[ 8] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0037, 0x0026 };
+    keys[ 9] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0038, 0x002a };
+    keys[10] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0039, 0x0028 };
     // F1-F12
     keys[59] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbe, 0xffbe };
     keys[60] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbf, 0xffbf };
@@ -2645,24 +2645,24 @@ mod_init(void)
     keys[88] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc9, 0xffc9 };
     // mods
     // shift, ctrl, alt
-    keys[42] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe1, 0xffe1 };
-    keys[29] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe3, 0xffe3 };
-    keys[56] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffe9, 0xffe9 };
+    keys[42] = { valid, 0xffe1, 0xffe1 };
+    keys[29] = { valid, 0xffe3, 0xffe3 };
+    keys[56] = { valid, 0xffe9, 0xffe9 };
     
-    // ETC esc, tab, \,./;'[]-=`
-    keys[1] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b };
+    // esc, tab, \,./;'[]-=`
+    keys[ 1] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b };
     keys[15] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff09, 0xff09 };
-    keys[43] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005c }; // backslash
-    keys[51] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002c }; // ,
-    keys[52] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002e }; // .
-    keys[53] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002f }; // /
-    keys[39] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003b }; // ;
-    keys[40] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0027 }; // '
-    keys[26] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005b }; // [
-    keys[27] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005d }; // [
-    keys[12] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002d }; // -
-    keys[13] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d }; // =
-    keys[41] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d }; // `
+    keys[43] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005c, 0x007c }; // backslash
+    keys[51] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002c, 0x003c }; // ,
+    keys[52] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002e, 0x003e }; // .
+    keys[53] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002f, 0x003f }; // /
+    keys[39] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003b, 0x003a }; // ;
+    keys[40] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0027, 0x0022 }; // '
+    keys[26] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005b, 0x007b }; // [
+    keys[27] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005d, 0x007d }; // [
+    keys[12] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002d, 0x005f }; // -
+    keys[13] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d, 0x002b }; // =
+    keys[41] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0060, 0x007e}; // `
 
     
     // del, back-space, home, end
@@ -2680,9 +2680,9 @@ mod_init(void)
     keys[75] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff51, 0xff51 };
     // num-lock, sysrq, scroll lock, break
     keys[69] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff7f, 0xff7f };
-    keys[70] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff15 };
+    keys[70] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff15, 0xff61 };
     keys[71] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff14, 0xff14 };
-    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff6b };
+    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff6b, 0xff13 };
     return (tintptr) v;
 }
 

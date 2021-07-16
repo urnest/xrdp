@@ -50,6 +50,7 @@ endif
 SUBDIRS = \
   common \
   vnc \
+  x11vnc-us-us \
   xup \
   mc \
   $(NEUTRINORDPDIR) \
