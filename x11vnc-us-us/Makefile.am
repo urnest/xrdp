@@ -10,14 +10,14 @@ AM_CPPFLAGS += -DXRDP_DEBUG
 endif
 
 module_LTLIBRARIES = \
-  libxrdpx11vnc.la
+  libx11vnc.la
 
-libvnc_la_SOURCES = \
-  vnc.c
+libx11vnc_la_SOURCES = \
+  x11vnc.c
 
-libvnc_la_LIBADD = \
+libx11vnc_la_LIBADD = \
   $(top_builddir)/common/libcommon.la
 
 if !MACOS
-libvnc_la_LDFLAGS = -avoid-version -module
+libx11vnc_la_LDFLAGS = -avoid-version -module
 endif

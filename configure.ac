@@ -426,6 +426,7 @@ AC_CONFIG_FILES([
   tools/devel/Makefile
   tools/devel/tcp_proxy/Makefile
   vnc/Makefile
+  x11vnc-us-us/Makefile
   xrdpapi/Makefile
   xrdp/Makefile
   xrdpvr/Makefile

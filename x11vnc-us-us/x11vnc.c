@@ -30,17 +30,18 @@
 #include <config_ac.h>
 #endif
 
-#include "vnc.h"
+#include "../vnc/vnc.h"
 #include "log.h"
 #include "trans.h"
 #include "ssl_calls.h"
 #include "string_calls.h"
 #include "xrdp_client_info.h"
+#include <stdio.h>
+#include <strings.h>
 
-
-#define X11_VNC_KEY_VALID = 0x01;
-#define X11_VNC_KEY_AUTO_REPEAT = 0x02;
-#define X11_VNC_KEY_IS_DOWN = 0x04;
+#define X11_VNC_KEY_VALID 0x01
+#define X11_VNC_KEY_AUTO_REPEAT 0x02
+#define X11_VNC_KEY_IS_DOWN 0x04
 
 struct x11vnckey
 {
@@ -52,7 +53,7 @@ struct x11vnckey
 struct x11vnc
 {
   struct vnc _;
-  x11vnckey keys[256];
+  struct x11vnckey keys[256];
 };
 
 /* Client-to-server messages */
@@ -683,19 +684,21 @@ resize_client_from_layout(struct vnc *v,
 }
 
 static void assert_less(int a, int b){
-  if (!a<b){
+  if (!(a<b)){
     abort();
   }
 }
 static void assert_greater_equal(int a, int b){
-  if (!a>=b){
+  if (!(a>=b)){
     abort();
   }
 }
 
 static int sendVncKey(struct vnc *v, int vncKeyCode, int pressed)
 {
+  struct stream *s;
   int error;
+  make_stream(s);
   init_stream(s, 8192);
   out_uint8(s, C2S_KEY_EVENT);
   out_uint8(s, pressed); /* down flag */
@@ -711,17 +714,17 @@ int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
   static const int KEY_PRESSED=1;
   static const int KEY_RELEASED=0;
 
-  struct x11vnc* v((struct x11vnc*)v_);
-  struct x11vnckey* keys(v->keys);
+  struct x11vnc* v=(struct x11vnc*)v_;
+  struct x11vnckey* keys=v->keys;
   int keyState;
   int vncKeyCode;
-  const int shiftIsDown = keys[42] & KEY_IS_DOWN;
-  int status;
+  const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
+  int status=0;
   const int direction = rdpKeyEvent==32768 ? KEY_RELEASED : KEY_PRESSED;
   assert_less(rdpKeyCode, 256);
   assert_greater_equal(rdpKeyCode, 0);
   keyState = keys[rdpKeyCode].attrs;
-  if (!keyState & KEY_VALID)
+  if (! (keyState & X11_VNC_KEY_VALID))
   {
     printf("rdp key code %d is not mapped by xrdp x11vnc module", rdpKeyCode);
     return 0;
@@ -732,7 +735,7 @@ int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
   // auto-repeat, so for keys we want to auto-repeat, we ignore
   // rdp key-up and instead generate a down-up pair for each rdp key-down
   // this way auto-repeat does not depend on network latency
-  if (rdpKeyCode & KEY_AUTO_REPEAT)
+  if (rdpKeyCode & X11_VNC_KEY_AUTO_REPEAT)
   {
     if (direction == KEY_PRESSED)
     {
@@ -744,15 +747,15 @@ int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
   }
   else
   {
-    if ((direction == KEY_PRESSED) && (!keyState & KEY_IS_DOWN))
+    if ((direction == KEY_PRESSED) && !(keyState & X11_VNC_KEY_IS_DOWN))
     {
       status = sendVncKey(v_, vncKeyCode, KEY_PRESSED);
-      keys[rdpKeyCode].attrs |= KEY_IS_DOWN;
+      keys[rdpKeyCode].attrs |= X11_VNC_KEY_IS_DOWN;
     }
-    else if ((direction == KEY_RELEASED) && (keyState & KEY_IS_DOWN))
+    else if ((direction == KEY_RELEASED) && (keyState & X11_VNC_KEY_IS_DOWN))
     {
       status = sendVncKey(v_, vncKeyCode, KEY_RELEASED);
-      keys[rdpKeyCode].attrs &= ~KEY_IS_DOWN;
+      keys[rdpKeyCode].attrs &= ~X11_VNC_KEY_IS_DOWN;
     }
   }
   return status;
@@ -765,7 +768,6 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
               long param3, long param4)
 {
     struct stream *s;
-    int key;
     int error;
     int x;
     int y;
@@ -2557,132 +2559,138 @@ lib_mod_server_monitor_full_invalidate(struct vnc *v, int param1, int param2)
     return 0;
 }
 
+static struct x11vnckey kk(int attrs, int sym, int shiftedSym)
+{
+  struct x11vnckey result;
+  result.attrs=attrs;
+  result.vncKeyCode=sym;
+  result.shiftedVncKeyCode=shiftedSym;
+  return result;
+}
 /******************************************************************************/
 tintptr EXPORT_CC
 mod_init(void)
 {
     struct x11vnc *v;
     struct x11vnckey* keys;
-    
+
     v = (struct x11vnc *)g_malloc(sizeof(struct x11vnc), 1);
     /* set client functions */
-    v->size = sizeof(struct x11vnc);
-    v->version = CURRENT_MOD_VER;
-    v->handle = (tintptr) v;
-    v->mod_connect = lib_mod_connect;
-    v->mod_start = lib_mod_start;
-    v->mod_handle_key = lib_mod_handle_key;
-    v->mod_event = lib_mod_event;
-    v->mod_signal = lib_mod_signal;
-    v->mod_end = lib_mod_end;
-    v->mod_set_param = lib_mod_set_param;
-    v->mod_get_wait_objs = lib_mod_get_wait_objs;
-    v->mod_check_wait_objs = lib_mod_check_wait_objs;
-    v->mod_frame_ack = lib_mod_frame_ack;
-    v->mod_suppress_output = lib_mod_suppress_output;
-    v->mod_server_monitor_resize = lib_mod_server_monitor_resize;
-    v->mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
-    v->mod_server_version_message = lib_mod_server_version_message;
+    v->_.size = sizeof(struct x11vnc);
+    v->_.version = CURRENT_MOD_VER;
+    v->_.handle = (tintptr) v;
+    v->_.mod_connect = lib_mod_connect;
+    v->_.mod_start = lib_mod_start;
+    v->_.mod_handle_key = lib_mod_handle_key;
+    v->_.mod_event = lib_mod_event;
+    v->_.mod_signal = lib_mod_signal;
+    v->_.mod_end = lib_mod_end;
+    v->_.mod_set_param = lib_mod_set_param;
+    v->_.mod_get_wait_objs = lib_mod_get_wait_objs;
+    v->_.mod_check_wait_objs = lib_mod_check_wait_objs;
+    v->_.mod_frame_ack = lib_mod_frame_ack;
+    v->_.mod_suppress_output = lib_mod_suppress_output;
+    v->_.mod_server_monitor_resize = lib_mod_server_monitor_resize;
+    v->_.mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
+    v->_.mod_server_version_message = lib_mod_server_version_message;
 
     /* Member variables */
-    v->enabled_encodings_mask = -1;
+    v->_.enabled_encodings_mask = -1;
     bzero(&v->keys[0], sizeof(v->keys)*sizeof(v->keys[0]));
     keys=&v->keys[0];
 
-    const int valid=X11_VNC_KEY_VALID;
-    
     //a-z
-    keys[30] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0061, 0x0041 };
-    keys[48] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0062, 0x0042 };
-    keys[46] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0063, 0x0043 };
-    keys[32] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0064, 0x0044 };
-    keys[18] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0065, 0x0045 };
-    keys[33] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0066, 0x0046 };
-    keys[34] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0067, 0x0047 };
-    keys[35] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0068, 0x0048 };
-    keys[23] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0069, 0x0049 };
-    keys[36] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006a, 0x004a };
-    keys[37] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006b, 0x004b };
-    keys[38] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006c, 0x004c };
-    keys[50] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006d, 0x004d };
-    keys[49] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006e, 0x004e };
-    keys[24] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x006f, 0x004f };
-    keys[25] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0070, 0x0050 };
-    keys[16] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0071, 0x0051 };
-    keys[19] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0072, 0x0052 };
-    keys[31] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0073, 0x0053 };
-    keys[20] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0074, 0x0054 };
-    keys[22] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0075, 0x0055 };
-    keys[47] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0076, 0x0056 };
-    keys[17] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0077, 0x0057 };
-    keys[45] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0078, 0x0058 };
-    keys[21] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0079, 0x0059 };
-    keys[44] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x007a, 0x005a };
+    keys[30] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0061, 0x0041);
+    keys[48] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0062, 0x0042);
+    keys[46] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0063, 0x0043);
+    keys[32] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0064, 0x0044);
+    keys[18] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0065, 0x0045);
+    keys[33] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0066, 0x0046);
+    keys[34] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0067, 0x0047);
+    keys[35] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0068, 0x0048);
+    keys[23] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0069, 0x0049);
+    keys[36] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006a, 0x004a);
+    keys[37] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006b, 0x004b);
+    keys[38] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006c, 0x004c);
+    keys[50] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006d, 0x004d);
+    keys[49] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006e, 0x004e);
+    keys[24] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006f, 0x004f);
+    keys[25] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0070, 0x0050);
+    keys[16] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0071, 0x0051);
+    keys[19] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0072, 0x0052);
+    keys[31] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0073, 0x0053);
+    keys[20] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0074, 0x0054);
+    keys[22] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0075, 0x0055);
+    keys[47] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0076, 0x0056);
+    keys[17] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0077, 0x0057);
+    keys[45] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0078, 0x0058);
+    keys[21] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0079, 0x0059);
+    keys[44] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x007a, 0x005a);
 
     // 0-9
-    keys[11] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0030, 0x0029 };
-    keys[ 2] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0031, 0x0021 };
-    keys[ 3] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0032, 0x0040 };
-    keys[ 4] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0033, 0x0023 };
-    keys[ 5] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0034, 0x0024 };
-    keys[ 6] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0035, 0x0025 };
-    keys[ 7] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0036, 0x005e };
-    keys[ 8] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0037, 0x0026 };
-    keys[ 9] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0038, 0x002a };
-    keys[10] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0039, 0x0028 };
+    keys[11] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0030, 0x0029);
+    keys[ 2] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0031, 0x0021);
+    keys[ 3] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0032, 0x0040);
+    keys[ 4] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0033, 0x0023);
+    keys[ 5] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0034, 0x0024);
+    keys[ 6] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0035, 0x0025);
+    keys[ 7] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0036, 0x005e);
+    keys[ 8] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0037, 0x0026);
+    keys[ 9] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0038, 0x002a);
+    keys[10] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0039, 0x0028);
     // F1-F12
-    keys[59] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbe, 0xffbe };
-    keys[60] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffbf, 0xffbf };
-    keys[61] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc0, 0xffc0 };
-    keys[62] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc1, 0xffc1 };
-    keys[63] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc2, 0xffc2 };
-    keys[64] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc3, 0xffc3 };
-    keys[65] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc4, 0xffc4 };
-    keys[66] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc5, 0xffc5 };
-    keys[67] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc6, 0xffc6 };
-    keys[68] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc7, 0xffc7 };
-    keys[87] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc8, 0xffc8 };
-    keys[88] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xffc9, 0xffc9 };
+    keys[59] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffbe, 0xffbe);
+    keys[60] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffbf, 0xffbf);
+    keys[61] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc0, 0xffc0);
+    keys[62] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc1, 0xffc1);
+    keys[63] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc2, 0xffc2);
+    keys[64] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc3, 0xffc3);
+    keys[65] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc4, 0xffc4);
+    keys[66] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc5, 0xffc5);
+    keys[67] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc6, 0xffc6);
+    keys[68] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc7, 0xffc7);
+    keys[87] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc8, 0xffc8);
+    keys[88] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc9, 0xffc9);
     // mods
     // shift, ctrl, alt
-    keys[42] = { valid, 0xffe1, 0xffe1 };
-    keys[29] = { valid, 0xffe3, 0xffe3 };
-    keys[56] = { valid, 0xffe9, 0xffe9 };
+    keys[42] = kk(0, 0xffe1, 0xffe1);
+    keys[29] = kk(0, 0xffe3, 0xffe3);
+    keys[56] = kk(0, 0xffe9, 0xffe9);
     
     // esc, tab, \,./;'[]-=`
-    keys[ 1] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b };
-    keys[15] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff09, 0xff09 };
-    keys[43] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005c, 0x007c }; // backslash
-    keys[51] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002c, 0x003c }; // ,
-    keys[52] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002e, 0x003e }; // .
-    keys[53] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002f, 0x003f }; // /
-    keys[39] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003b, 0x003a }; // ;
-    keys[40] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0027, 0x0022 }; // '
-    keys[26] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005b, 0x007b }; // [
-    keys[27] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x005d, 0x007d }; // [
-    keys[12] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x002d, 0x005f }; // -
-    keys[13] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x003d, 0x002b }; // =
-    keys[41] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0x0060, 0x007e}; // `
+    keys[ 1] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b);
+    keys[15] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff09, 0xff09);
+    keys[43] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005c, 0x007c); // backslash
+    keys[51] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002c, 0x003c); // ,
+    keys[52] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002e, 0x003e); // .
+    keys[53] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002f, 0x003f); // /
+    keys[39] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x003b, 0x003a); // ;
+    keys[40] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0027, 0x0022); // '
+    keys[26] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005b, 0x007b); // [
+    keys[27] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005d, 0x007d); // [
+    keys[12] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002d, 0x005f); // -
+    keys[13] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x003d, 0x002b); // =
+    keys[41] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0060, 0x007); // `
 
     
     // del, back-space, home, end
-    keys[83] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff9f, 0xff9f }; // del
-    keys[14] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff08, 0xff08 }; // backspace
-    keys[71] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff95, 0xff95 }; // home
-    keys[79] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff9c, 0xff9c }; // end
+    keys[83] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff9f, 0xff9f); // del
+    keys[14] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff08, 0xff08); // backspace
+    keys[71] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff95, 0xff95); // home
+    keys[79] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff9c, 0xff9c); // end
     // pgup, pgdown
-    keys[73] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff55, 0xff55 };
-    keys[81] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff56, 0xff56 };
+    keys[73] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff55, 0xff55);
+    keys[81] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff56, 0xff56);
     // up,right,down,left
-    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff52, 0xff52 };
-    keys[77] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff53, 0xff53 };
-    keys[80] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff54, 0xff54 };
-    keys[75] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff51, 0xff51 };
+    keys[72] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff52, 0xff52);
+    keys[77] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff53, 0xff53);
+    keys[80] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff54, 0xff54);
+    keys[75] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff51, 0xff51);
     // num-lock, sysrq, scroll lock, break
-    keys[69] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff7f, 0xff7f };
-    keys[70] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff15, 0xff61 };
-    keys[71] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff14, 0xff14 };
-    keys[72] = { valid | X11_VNC_KEY_AUTO_REPEAT, 0xff6b, 0xff13 };
+    keys[69] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff7f, 0xff7f);
+    keys[70] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff15, 0xff61);
+    keys[71] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff14, 0xff14);
+    keys[72] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff6b, 0xff13);
     return (tintptr) v;
 }
 
