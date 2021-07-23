@@ -1498,15 +1498,25 @@ xrdp_wm_key(struct xrdp_wm *self, int device_flags, int scan_code)
     int msg;
     struct xrdp_key_info *ki;
 
-    printf("%d %d\n", device_flags, scan_code);
+    printf("key %d %d\n", device_flags, scan_code);
     /*g_printf("count %d\n", self->key_down_list->count);*/
-    scan_code = scan_code % 128;
-
+    
     if (self->popup_wnd != 0)
     {
         xrdp_wm_clear_popup(self);
         return 0;
     }
+
+    if (self->mm->mod != 0)
+    {
+        if (self->mm->mod->mod_handle_key != 0)
+        {
+          return self->mm->mod->mod_handle_key(self->mm->mod,
+                                               scan_code,
+                                               device_flags);
+        }
+    }
+    scan_code = scan_code % 128;
 
     // workaround odd shift behavior
     // see https://github.com/neutrinolabs/xrdp/issues/397

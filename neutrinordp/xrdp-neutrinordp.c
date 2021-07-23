@@ -2141,6 +2141,7 @@ mod_init(void)
     mod->mod_server_version_message = lxrdp_server_version_message;
     mod->mod_server_monitor_resize = lxrdp_server_monitor_resize;
     mod->mod_server_monitor_full_invalidate = lxrdp_server_monitor_full_invalidate;
+    mod->mod_handle_key = 0;
 
     mod->inst = freerdp_new();
     mod->inst->PreConnect = lfreerdp_pre_connect;

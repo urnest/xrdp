@@ -24,7 +24,7 @@
 #include "os_calls.h"
 #include "defines.h"
 
-#define CURRENT_MOD_VER 4
+#define CURRENT_MOD_VER 5
 
 /* Screen used for ExtendedDesktopSize / Set DesktopSize */
 struct vnc_screen
@@ -65,7 +65,6 @@ struct vnc
     /* client functions */
     int (*mod_start)(struct vnc *v, int w, int h, int bpp);
     int (*mod_connect)(struct vnc *v);
-    int (*mod_handle_key)(struct vnc *v, int rdpKeyCode, int rdpKeyEvent);
     int (*mod_event)(struct vnc *v, int msg, long param1, long param2,
                      long param3, long param4);
     int (*mod_signal)(struct vnc *v);
@@ -83,7 +82,8 @@ struct vnc
     int (*mod_server_monitor_full_invalidate)(struct vnc *v,
                                int width, int height);
     int (*mod_server_version_message)(struct vnc *v);
-    tintptr mod_dumby[100 - 14]; /* align, 100 minus the number of mod
+    int (*mod_handle_key)(struct vnc *v, int rdpKeyCode, int rdpKeyEvent);
+    tintptr mod_dumby[100 - 15]; /* align, 100 minus the number of mod
                                   functions above */
     /* server functions */
     int (*server_begin_update)(struct vnc *v);

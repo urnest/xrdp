@@ -2517,6 +2517,7 @@ mod_init(void)
     v->mod_server_monitor_resize = lib_mod_server_monitor_resize;
     v->mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
     v->mod_server_version_message = lib_mod_server_version_message;
+    v->mod_handle_key=0;
 
     /* Member variables */
     v->enabled_encodings_mask = -1;

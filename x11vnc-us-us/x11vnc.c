@@ -2700,7 +2700,6 @@ mod_init(void)
     v->_.handle = (tintptr) v;
     v->_.mod_connect = lib_mod_connect;
     v->_.mod_start = lib_mod_start;
-    v->_.mod_handle_key = lib_mod_handle_key;
     v->_.mod_event = lib_mod_event;
     v->_.mod_signal = lib_mod_signal;
     v->_.mod_end = lib_mod_end;
@@ -2712,6 +2711,7 @@ mod_init(void)
     v->_.mod_server_monitor_resize = lib_mod_server_monitor_resize;
     v->_.mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
     v->_.mod_server_version_message = lib_mod_server_version_message;
+    v->_.mod_handle_key = lib_mod_handle_key;
 
     /* Member variables */
     v->_.enabled_encodings_mask = -1;
