@@ -1,4 +1,15 @@
-xju@xjutv:~/xrdp/xrdp$ xrdp/xrdp --nodaemon -c xrdp/xrdp.ini --dump-config
+x need to track capslock and apply to shifted logic but need "lock" attr
+x numlockable too
+- keypad keycodes and mappings
+x refactor:
+  handle_key -> handle_rdp_key
+    validateRdpKeyCode -> x11vnckey*
+    handleVncKey -> rest
+
+x11vnc -rfbauth ~/.vnc/passwd  -display :0
+
+root@xjutv:/home/xju/xrdp/xrdp# xrdp/xrdp --nodaemon -c xrdp/xrdp.ini --dump-config
+
 
 key mapping:
 xrdp_wm.c xrdp_wm_key

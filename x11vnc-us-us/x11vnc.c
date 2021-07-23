@@ -39,21 +39,68 @@
 #include <stdio.h>
 #include <strings.h>
 
-#define X11_VNC_KEY_VALID 0x01
-#define X11_VNC_KEY_AUTO_REPEAT 0x02
-#define X11_VNC_KEY_IS_DOWN 0x04
+typedef enum
+{
+  X11_VNC_KEY_VALID=0x01,
+  X11_VNC_KEY_AUTO_REPEAT=0x02,
+  X11_VNC_KEY_IS_DOWN=0x04,
+  X11_VNC_KEY_CAPS_LOCKABLE=0x08,
+  X11_VNC_KEY_NUM_LOCKABLE=0x10,
+  X11_VNC_KEY_IS_CAPSLOCK=0x20,
+  X11_VNC_KEY_IS_NUMLOCK=0x40,
+} X11VncKeyAttrs;
+
+typedef enum
+{
+  X11_VNC_KEY_RELEASED=0,
+  X11_VNC_KEY_PRESSED=1
+} X11VncKeyDirection;
 
 struct x11vnckey
 {
-  uint8_t attrs; // X11_VNC_KEY_* per rdp keycode
-  uint8_t vncKeyCode; // if appropriate based on keyState
-  uint8_t shiftedVncKeyCode;  // if appropriate based on keyState
+  X11VncKeyAttrs attrs; // X11_VNC_KEY_* per rdp keycode
+  uint8_t        vncKeyCode; // if appropriate based on keyState
+  uint8_t        shiftedVncKeyCode;  // if appropriate based on keyState
 };
 
+static int keyAutoRepeats(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_AUTO_REPEAT;
+}
+static int keyIsCapsLockable(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_CAPS_LOCKABLE;
+}
+static int keyIsNumLockable(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_NUM_LOCKABLE;
+}
+static int keyIsCapsLock(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_CAPSLOCK;
+}
+static int keyIsNumLock(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_NUMLOCK;
+}
+static int keyIsDown(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_DOWN;
+}
+static void setKeyDown(struct x11vnckey* const k)
+{
+  k->attrs |= X11_VNC_KEY_IS_DOWN;
+}
+static void setKeyUp(struct x11vnckey* const k)
+{
+  k->attrs &= ~X11_VNC_KEY_IS_DOWN;
+}
 struct x11vnc
 {
   struct vnc _;
   struct x11vnckey keys[256];
+  int    capsLocked;
+  int    numLocked;
 };
 
 /* Client-to-server messages */
@@ -683,17 +730,6 @@ resize_client_from_layout(struct vnc *v,
     return error;
 }
 
-static void assert_less(int a, int b){
-  if (!(a<b)){
-    abort();
-  }
-}
-static void assert_greater_equal(int a, int b){
-  if (!(a>=b)){
-    abort();
-  }
-}
-
 static int sendVncKey(struct vnc *v, int vncKeyCode, int pressed)
 {
   struct stream *s;
@@ -709,55 +745,113 @@ static int sendVncKey(struct vnc *v, int vncKeyCode, int pressed)
   return error;
 }
 
-int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
+/* translate vncKey into X11 key sym to send to vnc server */
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+static int translateVncKeyToX11KeySym(
+  const struct x11vnckey* const vncKey,
+  const int shiftIsDown,
+  const int capsLocked,
+  const int numLocked)
 {
-  static const int KEY_PRESSED=1;
-  static const int KEY_RELEASED=0;
-
-  struct x11vnc* v=(struct x11vnc*)v_;
-  struct x11vnckey* keys=v->keys;
-  int keyState;
-  int vncKeyCode;
-  const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
-  int status=0;
-  const int direction = rdpKeyEvent==32768 ? KEY_RELEASED : KEY_PRESSED;
-  assert_less(rdpKeyCode, 256);
-  assert_greater_equal(rdpKeyCode, 0);
-  keyState = keys[rdpKeyCode].attrs;
-  if (! (keyState & X11_VNC_KEY_VALID))
-  {
-    printf("rdp key code %d is not mapped by xrdp x11vnc module", rdpKeyCode);
-    return 0;
+  if (keyIsCapsLockable(vncKey)){
+    return (shiftIsDown != capsLocked)?
+      vncKey->shiftedVncKeyCode:
+      vncKey->vncKeyCode;
   }
-  vncKeyCode = shiftIsDown?keys[rdpKeyCode].shiftedVncKeyCode:
-                           keys[rdpKeyCode].vncKeyCode;
-  // rdp sends repeated key-down with no intervening key-up for
-  // auto-repeat, so for keys we want to auto-repeat, we ignore
-  // rdp key-up and instead generate a down-up pair for each rdp key-down
-  // this way auto-repeat does not depend on network latency
-  if (rdpKeyCode & X11_VNC_KEY_AUTO_REPEAT)
+  if (keyIsNumLockable(vncKey)){
+    return (shiftIsDown != numLocked)?
+      vncKey->shiftedVncKeyCode:
+      vncKey->vncKeyCode;
+  }
+  return shiftIsDown?
+    vncKey->shiftedVncKeyCode:
+    vncKey->vncKeyCode;
+}
+
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+/* returns 0 for success */
+static int handleVncKey(struct x11vnc* const v,
+                        struct x11vnckey* const vncKey,
+                        const X11VncKeyDirection direction)
+{
+  const struct x11vnckey* keys=v->keys;
+  const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
+  int x11keySym=translateVncKeyToX11KeySym(
+    vncKey,shiftIsDown,v->capsLocked,v->numLocked);
+  int status=0;
+
+  if (keyIsCapsLock(vncKey) && direction==X11_VNC_KEY_RELEASED)
   {
-    if (direction == KEY_PRESSED)
+    v->capsLocked=!v->capsLocked;
+  }
+  if (keyIsNumLock(vncKey) && direction==X11_VNC_KEY_RELEASED)
+  {
+    v->numLocked=!v->numLocked;
+  }
+
+  if (keyAutoRepeats(vncKey))
+  {
+    // rdp sends repeated key-down with no intervening key-up for
+    // auto-repeat, so for keys we want to auto-repeat, we ignore
+    // rdp key-up and instead generate a down-up pair for each rdp key-down
+    // this way auto-repeat does not depend on network latency
+    if (direction == X11_VNC_KEY_PRESSED)
     {
-      status=sendVncKey(v_, vncKeyCode, KEY_PRESSED);
+      status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
       if (status == 0){
-        status=sendVncKey(v_, vncKeyCode, KEY_RELEASED);
+        status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
       }
     }
   }
   else
   {
-    if ((direction == KEY_PRESSED) && !(keyState & X11_VNC_KEY_IS_DOWN))
+    // for non-autorepeat keys, ignore rdp's repeated key-downs with
+    // no intervening key-up
+    if ((direction == X11_VNC_KEY_PRESSED) && !keyIsDown(vncKey))
     {
-      status = sendVncKey(v_, vncKeyCode, KEY_PRESSED);
-      keys[rdpKeyCode].attrs |= X11_VNC_KEY_IS_DOWN;
+      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
+      if (status == 0){
+        setKeyDown(vncKey);
+      }
     }
-    else if ((direction == KEY_RELEASED) && (keyState & X11_VNC_KEY_IS_DOWN))
+    else if ((direction == X11_VNC_KEY_RELEASED) &&
+             keyIsDown(vncKey))
     {
-      status = sendVncKey(v_, vncKeyCode, KEY_RELEASED);
-      keys[rdpKeyCode].attrs &= ~X11_VNC_KEY_IS_DOWN;
+      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
+      if (status == 0){
+        setKeyUp(vncKey);
+      }
     }
   }
+  return status;
+}
+
+int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
+{
+  struct x11vnc* const v=(struct x11vnc*)v_;
+  int status=0;
+  const X11VncKeyDirection direction = (rdpKeyEvent==32768 ?
+                                        X11_VNC_KEY_RELEASED :
+                                        X11_VNC_KEY_PRESSED);
+  if (rdpKeyCode >= 256)
+  {
+    printf("rdp key code %d (>= 256) is invalid for xrdp x11vnc module", rdpKeyCode);
+    return 0;
+  }
+  if (rdpKeyCode < 0)
+  {
+    printf("rdp key code %d (< 0) is invalid for xrdp x11vnc module", rdpKeyCode);
+    return 0;
+  }
+  if (! (v->keys[rdpKeyCode].attrs & X11_VNC_KEY_VALID))
+  {
+    printf("rdp key code %d is not mapped by xrdp x11vnc module", rdpKeyCode);
+    return 0;
+  }
+  status = handleVncKey(v,
+                        &v->keys[rdpKeyCode],
+                        direction);
+  
   return status;
 }
 
@@ -805,7 +899,7 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
     }
     else if ((msg >= 15) && (msg <= 16)) /* key events */
     {
-      // see handleKey
+      // see lib_mod_handle_key
     }
     else if (msg >= 100 && msg <= 110) /* mouse events */
     {
@@ -2562,7 +2656,7 @@ lib_mod_server_monitor_full_invalidate(struct vnc *v, int param1, int param2)
 static struct x11vnckey kk(int attrs, int sym, int shiftedSym)
 {
   struct x11vnckey result;
-  result.attrs=attrs;
+  result.attrs=(X11VncKeyAttrs)attrs;
   result.vncKeyCode=sym;
   result.shiftedVncKeyCode=shiftedSym;
   return result;
@@ -2599,98 +2693,111 @@ mod_init(void)
     bzero(&v->keys[0], sizeof(v->keys)*sizeof(v->keys[0]));
     keys=&v->keys[0];
 
+    v->capsLocked = 0;
+    v->numLocked = 0;
+    
+    const int AUTOREPEAT=X11_VNC_KEY_AUTO_REPEAT;
+    const int CAPSLOCKABLE=X11_VNC_KEY_CAPS_LOCKABLE;
+    //int NUMLOCKABLE=X11_VNC_KEY_NUM_LOCKABLE;
+    const int IS_CAPSLOCK=X11_VNC_KEY_IS_CAPSLOCK;
+    const int IS_NUMLOCK=X11_VNC_KEY_IS_NUMLOCK;
+    
     //a-z
-    keys[30] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0061, 0x0041);
-    keys[48] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0062, 0x0042);
-    keys[46] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0063, 0x0043);
-    keys[32] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0064, 0x0044);
-    keys[18] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0065, 0x0045);
-    keys[33] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0066, 0x0046);
-    keys[34] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0067, 0x0047);
-    keys[35] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0068, 0x0048);
-    keys[23] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0069, 0x0049);
-    keys[36] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006a, 0x004a);
-    keys[37] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006b, 0x004b);
-    keys[38] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006c, 0x004c);
-    keys[50] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006d, 0x004d);
-    keys[49] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006e, 0x004e);
-    keys[24] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x006f, 0x004f);
-    keys[25] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0070, 0x0050);
-    keys[16] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0071, 0x0051);
-    keys[19] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0072, 0x0052);
-    keys[31] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0073, 0x0053);
-    keys[20] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0074, 0x0054);
-    keys[22] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0075, 0x0055);
-    keys[47] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0076, 0x0056);
-    keys[17] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0077, 0x0057);
-    keys[45] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0078, 0x0058);
-    keys[21] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0079, 0x0059);
-    keys[44] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x007a, 0x005a);
+    keys[30] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0061, 0x0041);
+    keys[48] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0062, 0x0042);
+    keys[46] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0063, 0x0043);
+    keys[32] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0064, 0x0044);
+    keys[18] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0065, 0x0045);
+    keys[33] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0066, 0x0046);
+    keys[34] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0067, 0x0047);
+    keys[35] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0068, 0x0048);
+    keys[23] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0069, 0x0049);
+    keys[36] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006a, 0x004a);
+    keys[37] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006b, 0x004b);
+    keys[38] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006c, 0x004c);
+    keys[50] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006d, 0x004d);
+    keys[49] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006e, 0x004e);
+    keys[24] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006f, 0x004f);
+    keys[25] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0070, 0x0050);
+    keys[16] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0071, 0x0051);
+    keys[19] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0072, 0x0052);
+    keys[31] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0073, 0x0053);
+    keys[20] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0074, 0x0054);
+    keys[22] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0075, 0x0055);
+    keys[47] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0076, 0x0056);
+    keys[17] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0077, 0x0057);
+    keys[45] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0078, 0x0058);
+    keys[21] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0079, 0x0059);
+    keys[44] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x007a, 0x005a);
 
     // 0-9
-    keys[11] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0030, 0x0029);
-    keys[ 2] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0031, 0x0021);
-    keys[ 3] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0032, 0x0040);
-    keys[ 4] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0033, 0x0023);
-    keys[ 5] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0034, 0x0024);
-    keys[ 6] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0035, 0x0025);
-    keys[ 7] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0036, 0x005e);
-    keys[ 8] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0037, 0x0026);
-    keys[ 9] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0038, 0x002a);
-    keys[10] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0039, 0x0028);
+    keys[11] = kk(AUTOREPEAT, 0x0030, 0x0029);
+    keys[ 2] = kk(AUTOREPEAT, 0x0031, 0x0021);
+    keys[ 3] = kk(AUTOREPEAT, 0x0032, 0x0040);
+    keys[ 4] = kk(AUTOREPEAT, 0x0033, 0x0023);
+    keys[ 5] = kk(AUTOREPEAT, 0x0034, 0x0024);
+    keys[ 6] = kk(AUTOREPEAT, 0x0035, 0x0025);
+    keys[ 7] = kk(AUTOREPEAT, 0x0036, 0x005e);
+    keys[ 8] = kk(AUTOREPEAT, 0x0037, 0x0026);
+    keys[ 9] = kk(AUTOREPEAT, 0x0038, 0x002a);
+    keys[10] = kk(AUTOREPEAT, 0x0039, 0x0028);
     // F1-F12
-    keys[59] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffbe, 0xffbe);
-    keys[60] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffbf, 0xffbf);
-    keys[61] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc0, 0xffc0);
-    keys[62] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc1, 0xffc1);
-    keys[63] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc2, 0xffc2);
-    keys[64] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc3, 0xffc3);
-    keys[65] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc4, 0xffc4);
-    keys[66] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc5, 0xffc5);
-    keys[67] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc6, 0xffc6);
-    keys[68] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc7, 0xffc7);
-    keys[87] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc8, 0xffc8);
-    keys[88] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xffc9, 0xffc9);
+    keys[59] = kk(AUTOREPEAT, 0xffbe, 0xffbe);
+    keys[60] = kk(AUTOREPEAT, 0xffbf, 0xffbf);
+    keys[61] = kk(AUTOREPEAT, 0xffc0, 0xffc0);
+    keys[62] = kk(AUTOREPEAT, 0xffc1, 0xffc1);
+    keys[63] = kk(AUTOREPEAT, 0xffc2, 0xffc2);
+    keys[64] = kk(AUTOREPEAT, 0xffc3, 0xffc3);
+    keys[65] = kk(AUTOREPEAT, 0xffc4, 0xffc4);
+    keys[66] = kk(AUTOREPEAT, 0xffc5, 0xffc5);
+    keys[67] = kk(AUTOREPEAT, 0xffc6, 0xffc6);
+    keys[68] = kk(AUTOREPEAT, 0xffc7, 0xffc7);
+    keys[87] = kk(AUTOREPEAT, 0xffc8, 0xffc8);
+    keys[88] = kk(AUTOREPEAT, 0xffc9, 0xffc9);
     // mods
     // shift, ctrl, alt
     keys[42] = kk(0, 0xffe1, 0xffe1);
     keys[29] = kk(0, 0xffe3, 0xffe3);
     keys[56] = kk(0, 0xffe9, 0xffe9);
-    
+
+    // capslock
+    keys[58] = kk(IS_CAPSLOCK, 0xffe5, 0xffe5);
+
     // esc, tab, \,./;'[]-=`
-    keys[ 1] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff1b, 0xff1b);
-    keys[15] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff09, 0xff09);
-    keys[43] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005c, 0x007c); // backslash
-    keys[51] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002c, 0x003c); // ,
-    keys[52] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002e, 0x003e); // .
-    keys[53] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002f, 0x003f); // /
-    keys[39] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x003b, 0x003a); // ;
-    keys[40] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0027, 0x0022); // '
-    keys[26] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005b, 0x007b); // [
-    keys[27] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x005d, 0x007d); // [
-    keys[12] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x002d, 0x005f); // -
-    keys[13] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x003d, 0x002b); // =
-    keys[41] = kk(X11_VNC_KEY_AUTO_REPEAT, 0x0060, 0x007); // `
+    keys[ 1] = kk(AUTOREPEAT, 0xff1b, 0xff1b);
+    keys[15] = kk(AUTOREPEAT, 0xff09, 0xff09);
+    keys[43] = kk(AUTOREPEAT, 0x005c, 0x007c); // backslash
+    keys[51] = kk(AUTOREPEAT, 0x002c, 0x003c); // ,
+    keys[52] = kk(AUTOREPEAT, 0x002e, 0x003e); // .
+    keys[53] = kk(AUTOREPEAT, 0x002f, 0x003f); // /
+    keys[39] = kk(AUTOREPEAT, 0x003b, 0x003a); // ;
+    keys[40] = kk(AUTOREPEAT, 0x0027, 0x0022); // '
+    keys[26] = kk(AUTOREPEAT, 0x005b, 0x007b); // [
+    keys[27] = kk(AUTOREPEAT, 0x005d, 0x007d); // [
+    keys[12] = kk(AUTOREPEAT, 0x002d, 0x005f); // -
+    keys[13] = kk(AUTOREPEAT, 0x003d, 0x002b); // =
+    keys[41] = kk(AUTOREPEAT, 0x0060, 0x007); // `
 
     
     // del, back-space, home, end
-    keys[83] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff9f, 0xff9f); // del
-    keys[14] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff08, 0xff08); // backspace
-    keys[71] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff95, 0xff95); // home
-    keys[79] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff9c, 0xff9c); // end
+    keys[83] = kk(AUTOREPEAT, 0xff9f, 0xff9f); // del
+    keys[14] = kk(AUTOREPEAT, 0xff08, 0xff08); // backspace
+    keys[71] = kk(AUTOREPEAT, 0xff95, 0xff95); // home
+    keys[79] = kk(AUTOREPEAT, 0xff9c, 0xff9c); // end
     // pgup, pgdown
-    keys[73] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff55, 0xff55);
-    keys[81] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff56, 0xff56);
+    keys[73] = kk(AUTOREPEAT, 0xff55, 0xff55);
+    keys[81] = kk(AUTOREPEAT, 0xff56, 0xff56);
     // up,right,down,left
-    keys[72] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff52, 0xff52);
-    keys[77] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff53, 0xff53);
-    keys[80] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff54, 0xff54);
-    keys[75] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff51, 0xff51);
+    keys[72] = kk(AUTOREPEAT, 0xff52, 0xff52);
+    keys[77] = kk(AUTOREPEAT, 0xff53, 0xff53);
+    keys[80] = kk(AUTOREPEAT, 0xff54, 0xff54);
+    keys[75] = kk(AUTOREPEAT, 0xff51, 0xff51);
     // num-lock, sysrq, scroll lock, break
-    keys[69] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff7f, 0xff7f);
-    keys[70] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff15, 0xff61);
-    keys[71] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff14, 0xff14);
-    keys[72] = kk(X11_VNC_KEY_AUTO_REPEAT, 0xff6b, 0xff13);
+    keys[69] = kk(IS_NUMLOCK, 0xff7f, 0xff7f);
+    keys[70] = kk(AUTOREPEAT, 0xff15, 0xff61);
+    keys[71] = kk(AUTOREPEAT, 0xff14, 0xff14);
+    keys[72] = kk(AUTOREPEAT, 0xff6b, 0xff13);
+    
     return (tintptr) v;
 }
 
