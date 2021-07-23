@@ -770,9 +770,8 @@ static int translateVncKeyToX11KeySym(
 
 /* pre: vncKey->attrs & X11_VNC_KEY_VALID */
 /* returns 0 for success */
-static int handleVncKey(struct x11vnc* const v,
-                        struct x11vnckey* const vncKey,
-                        const X11VncKeyDirection direction)
+static int handleVncKeyPress(struct x11vnc* const v,
+                             struct x11vnckey* const vncKey)
 {
   const struct x11vnckey* keys=v->keys;
   const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
@@ -780,11 +779,48 @@ static int handleVncKey(struct x11vnc* const v,
     vncKey,shiftIsDown,v->capsLocked,v->numLocked);
   int status=0;
 
-  if (keyIsCapsLock(vncKey) && direction==X11_VNC_KEY_RELEASED)
+  if (keyAutoRepeats(vncKey))
+  {
+    // rdp sends repeated key-down with no intervening key-up for
+    // auto-repeat, so for keys we want to auto-repeat, we ignore
+    // rdp key-up and instead generate a down-up pair for each rdp key-down
+    // this way auto-repeat does not depend on network latency
+    status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
+    if (status == 0){
+      status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
+    }
+  }
+  else
+  {
+    // for non-autorepeat keys, ignore rdp's repeated key-downs with
+    // no intervening key-up
+    if (!keyIsDown(vncKey))
+    {
+      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
+      if (status == 0){
+        setKeyDown(vncKey);
+      }
+    }
+  }
+  return status;
+}
+
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+/* returns 0 for success */
+static int handleVncKeyRelease(struct x11vnc* const v,
+                               struct x11vnckey* const vncKey)
+{
+  const struct x11vnckey* keys=v->keys;
+  const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
+  int x11keySym=translateVncKeyToX11KeySym(
+    vncKey,shiftIsDown,v->capsLocked,v->numLocked);
+  int status=0;
+
+  if (keyIsCapsLock(vncKey))
   {
     v->capsLocked=!v->capsLocked;
   }
-  if (keyIsNumLock(vncKey) && direction==X11_VNC_KEY_RELEASED)
+  if (keyIsNumLock(vncKey))
   {
     v->numLocked=!v->numLocked;
   }
@@ -795,27 +831,12 @@ static int handleVncKey(struct x11vnc* const v,
     // auto-repeat, so for keys we want to auto-repeat, we ignore
     // rdp key-up and instead generate a down-up pair for each rdp key-down
     // this way auto-repeat does not depend on network latency
-    if (direction == X11_VNC_KEY_PRESSED)
-    {
-      status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
-      if (status == 0){
-        status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
-      }
-    }
   }
   else
   {
     // for non-autorepeat keys, ignore rdp's repeated key-downs with
     // no intervening key-up
-    if ((direction == X11_VNC_KEY_PRESSED) && !keyIsDown(vncKey))
-    {
-      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
-      if (status == 0){
-        setKeyDown(vncKey);
-      }
-    }
-    else if ((direction == X11_VNC_KEY_RELEASED) &&
-             keyIsDown(vncKey))
+    if (keyIsDown(vncKey))
     {
       status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
       if (status == 0){
@@ -848,10 +869,14 @@ int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
     printf("rdp key code %d is not mapped by xrdp x11vnc module", rdpKeyCode);
     return 0;
   }
-  status = handleVncKey(v,
-                        &v->keys[rdpKeyCode],
-                        direction);
-  
+  if (direction==X11_VNC_KEY_PRESSED){
+    status = handleVncKeyPress(v,
+                               &v->keys[rdpKeyCode]);
+  }
+  else{
+    status = handleVncKeyRelease(v,
+                                 &v->keys[rdpKeyCode]);
+  }  
   return status;
 }
 
