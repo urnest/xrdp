@@ -1,4 +1,4 @@
-right shift = 54 0x000
+x right shift = 54 0x000
 x need to track capslock and apply to shifted logic but need "lock" attr
 x numlockable too
 x keypad keycodes and mappings
@@ -58,7 +58,7 @@ x refactor:
     validateRdpKeyCode -> x11vnckey*
     handleVncKey -> rest
 
-x11vnc -rfbauth ~/.vnc/passwd  -display :0
+x11vnc -skip_lockkeys -repeat -rfbauth ~/.vnc/passwd  -display :0
 
 root@xjutv:/home/xju/xrdp/xrdp# xrdp/xrdp --nodaemon -c xrdp/xrdp.ini --dump-config
 
