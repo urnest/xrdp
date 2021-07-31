@@ -782,7 +782,9 @@ static int handleVncKeyPress(struct x11vnc* const v,
                              struct x11vnckey* const vncKey)
 {
   const struct x11vnckey* keys=v->keys;
-  const int shiftIsDown = keys[42].attrs & X11_VNC_KEY_IS_DOWN;
+  const int shiftIsDown =
+    (keys[42].attrs & X11_VNC_KEY_IS_DOWN) ||
+    (keys[54].attrs & X11_VNC_KEY_IS_DOWN);
   uint32_t x11keySym=translateVncKeyToX11KeySym(
     vncKey,shiftIsDown,v->capsLocked,v->numLocked);
   int status=0;
