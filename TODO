@@ -1,6 +1,58 @@
+right shift = 54 0x000
 x need to track capslock and apply to shifted logic but need "lock" attr
 x numlockable too
-- keypad keycodes and mappings
+x keypad keycodes and mappings
+key 16384 69 numlock
+key 32768 69 up
+key 16640 53 kp / (note 16640 must be to distinguish from main / which is also 53)
+key 33024 53
+key 16384 55 kp *
+key 32768 55
+key 16384 74 kp -
+key 32768 74
+key 16384 71 kp 7
+key 32768 71 
+key 16384 72 kp 8
+key 32768 72
+key 16384 73 kp 9
+key 32768 73
+key 16384 78 kp +
+key 32768 78
+key 16384 75 kp 4
+key 32768 75
+key 16384 76 kp 5
+key 32768 76
+key 16384 77 kp 6
+key 32768 77
+key 16384 79 kp 1
+key 32768 79
+key 16384 80 kp 2
+key 32768 80
+key 16384 81 kp 3
+key 32768 81
+key 16384 82 kp 0
+key 32768 82
+key 16384 83 kp .
+key 32768 83
+key 16640 28 kp enter
+key 33024 28
+
+x uprightdownleft
+72, 77, 80, 75 with 16640 = 0x4100 33024 = 0x8100
+
+x space:
+57 bank 0
+
+X print key: 93 0x100
+
+
+
+16384 = 0x4000
+32768 = 0x8000
+
+16640 = 0x4100
+33024 = 0x8100
+
 x refactor:
   handle_key -> handle_rdp_key
     validateRdpKeyCode -> x11vnckey*
