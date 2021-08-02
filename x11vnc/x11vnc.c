@@ -737,7 +737,7 @@ static int sendVncKey(struct vnc *v, uint32_t vncKeyCode, int pressed)
 {
   struct stream *s;
   int error;
-  printf("mod x11vnc: send vnc key 0x%04x %d\n", vncKeyCode, pressed);
+  LOG(LOG_LEVEL_DEBUG, "send vnc key 0x%04x %d\n", vncKeyCode, pressed);
   make_stream(s);
   init_stream(s, 8192);
   out_uint8(s, C2S_KEY_EVENT);
@@ -759,7 +759,7 @@ static uint32_t translateVncKeyToX11KeySym(
 {
   const int capsLockable=keyIsCapsLockable(vncKey);
   const int numLockable=keyIsNumLockable(vncKey);
-  printf("mod x11vnc: translate vnc key capslockable %d, numlockable %d, shift %d, capslock %d, numlock %d\n", capsLockable, numLockable, shiftIsDown, capsLocked, numLocked);
+  LOG(LOG_LEVEL_DEBUG, "translate vnc key capslockable %d, numlockable %d, shift %d, capslock %d, numlock %d\n", capsLockable, numLockable, shiftIsDown, capsLocked, numLocked);
   
   if (capsLockable){
     return ((shiftIsDown && !capsLocked) || (!shiftIsDown && capsLocked))?
@@ -789,7 +789,7 @@ static int handleVncKeyPress(struct x11vnc* const v,
     vncKey,shiftIsDown,v->capsLocked,v->numLocked);
   int status=0;
 
-  printf("mod x11vnc: handle vnc key 0x%04x press (shift %d, caps lock %d, num lock %d)\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
+  LOG(LOG_LEVEL_DEBUG, "handle vnc key 0x%04x press (shift %d, caps lock %d, num lock %d)\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
     
   if (keyAutoRepeats(vncKey))
   {
@@ -830,7 +830,7 @@ static int handleVncKeyRelease(struct x11vnc* const v,
     vncKey,shiftIsDown,v->capsLocked,v->numLocked);
   int status=0;
 
-  printf("mod x11vnc: handle vnc key 0x%04x release (shift %d, caps lock %d, num lock %d\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
+  LOG(LOG_LEVEL_DEBUG, "handle vnc key 0x%04x release (shift %d, caps lock %d, num lock %d\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
     
   if (keyIsCapsLock(vncKey))
   {
@@ -870,21 +870,21 @@ int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
   const X11VncKeyDirection direction = (rdpKeyEvent & 0x8000 ?
                                         X11_VNC_KEY_RELEASED :
                                         X11_VNC_KEY_PRESSED);
-  printf("mod x11vnc: handle rdp key %d event %d\n", rdpKeyCode, rdpKeyEvent);
+  LOG(LOG_LEVEL_DEBUG, "handle rdp key %d event %d\n", rdpKeyCode, rdpKeyEvent);
   if (rdpKeyCode >= 256)
   {
-    printf("mod x11vnc: rdp key code %d (>= 256) is invalid for xrdp x11vnc module", rdpKeyCode);
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d (>= 256) is invalid for xrdp x11vnc module", rdpKeyCode);
     return 0;
   }
   if (rdpKeyCode < 0)
   {
-    printf("mod x11vnc: rdp key code %d (< 0) is invalid for xrdp x11vnc module", rdpKeyCode);
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d (< 0) is invalid for xrdp x11vnc module", rdpKeyCode);
     return 0;
   }
   const int index=(rdpKeyEvent&0x100 ? 256:0)+rdpKeyCode;
   if (! (v->keys[index].attrs & X11_VNC_KEY_VALID))
   {
-    printf("mod x11vnc: rdp key code %d event %d is not mapped by xrdp x11vnc module", rdpKeyCode, rdpKeyEvent);
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d event %d is not mapped by xrdp x11vnc module", rdpKeyCode, rdpKeyEvent);
     return 0;
   }
   if (direction==X11_VNC_KEY_PRESSED){
