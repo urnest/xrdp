@@ -1498,8 +1498,7 @@ xrdp_wm_key(struct xrdp_wm *self, int device_flags, int scan_code)
     int msg;
     struct xrdp_key_info *ki;
 
-    printf("key %d %d\n", device_flags, scan_code);
-    /*g_printf("count %d\n", self->key_down_list->count);*/
+    LOG(LOG_LEVEL_DEBUG, "rdp key %d event %d\n", scan_code, device_flags);
     
     if (self->popup_wnd != 0)
     {

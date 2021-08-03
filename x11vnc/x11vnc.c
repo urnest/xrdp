@@ -2824,7 +2824,7 @@ mod_init(void)
     keys[27] = kk(AUTOREPEAT, 0x005d, 0x007d); // [
     keys[12] = kk(AUTOREPEAT, 0x002d, 0x005f); // -
     keys[13] = kk(AUTOREPEAT, 0x003d, 0x002b); // =
-    keys[41] = kk(AUTOREPEAT, 0x0060, 0x007); // `
+    keys[41] = kk(AUTOREPEAT, 0x0060, 0x007e); // `
 
     keys[256] = kk(AUTOREPEAT, 0xff08, 0xff08); // backspace
     
