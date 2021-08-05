@@ -2881,8 +2881,10 @@ mod_init(void)
     // space
     keys[57] = kk(AUTOREPEAT, 0x0020, 0x0020);
 
-    // linefeed (beside right ctrl)
-    keys[256+93] = kk(AUTOREPEAT, 0xff0a, 0xff0a);
+    // left super, right super, menu
+    keys[256+91] = kk(0, 0xffeb, 0xffeb);
+    keys[256+92] = kk(0, 0xffec, 0xffec);
+    keys[256+93] = kk(0, 0xff67, 0xff67);
     
     return (tintptr) v;
 }
