@@ -2813,7 +2813,7 @@ mod_init(void)
 
     // esc, tab, \,./;'[]-=`
     keys[ 1] = kk(AUTOREPEAT, 0xff1b, 0xff1b);
-    keys[15] = kk(AUTOREPEAT, 0xff09, 0xff09);
+    keys[15] = kk(AUTOREPEAT, 0xff09, 0xfe20);
     keys[43] = kk(AUTOREPEAT, 0x005c, 0x007c); // backslash
     keys[51] = kk(AUTOREPEAT, 0x002c, 0x003c); // ,
     keys[52] = kk(AUTOREPEAT, 0x002e, 0x003e); // .
@@ -2830,9 +2830,9 @@ mod_init(void)
     
     // ins,del, home, end
     keys[256+82] = kk(AUTOREPEAT, 0xff63, 0xff63); // ins
-    keys[256+83] = kk(AUTOREPEAT, 0xff9f, 0xff9f); // del
-    keys[256+71] = kk(AUTOREPEAT, 0xff95, 0xff95); // home
-    keys[256+79] = kk(AUTOREPEAT, 0xff9c, 0xff9c); // end
+    keys[256+83] = kk(AUTOREPEAT, 0xffff, 0xffff); // del
+    keys[256+71] = kk(AUTOREPEAT, 0xff50, 0xff50); // home
+    keys[256+79] = kk(AUTOREPEAT, 0xff57, 0xff57); // end
 
     // back-space
     keys[14] = kk(AUTOREPEAT, 0xff08, 0xff08);
