@@ -1,0 +1,869 @@
+x right shift = 54 0x000
+x need to track capslock and apply to shifted logic but need "lock" attr
+x numlockable too
+x keypad keycodes and mappings
+key 16384 69 numlock
+key 32768 69 up
+key 16640 53 kp / (note 16640 must be to distinguish from main / which is also 53)
+key 33024 53
+key 16384 55 kp *
+key 32768 55
+key 16384 74 kp -
+key 32768 74
+key 16384 71 kp 7
+key 32768 71 
+key 16384 72 kp 8
+key 32768 72
+key 16384 73 kp 9
+key 32768 73
+key 16384 78 kp +
+key 32768 78
+key 16384 75 kp 4
+key 32768 75
+key 16384 76 kp 5
+key 32768 76
+key 16384 77 kp 6
+key 32768 77
+key 16384 79 kp 1
+key 32768 79
+key 16384 80 kp 2
+key 32768 80
+key 16384 81 kp 3
+key 32768 81
+key 16384 82 kp 0
+key 32768 82
+key 16384 83 kp .
+key 32768 83
+key 16640 28 kp enter
+key 33024 28
+
+x uprightdownleft
+72, 77, 80, 75 with 16640 = 0x4100 33024 = 0x8100
+
+x space:
+57 bank 0
+
+X print key: 93 0x100
+
+
+
+16384 = 0x4000
+32768 = 0x8000
+
+16640 = 0x4100
+33024 = 0x8100
+
+x refactor:
+  handle_key -> handle_rdp_key
+    validateRdpKeyCode -> x11vnckey*
+    handleVncKey -> rest
+
+x11vnc -skip_lockkeys -repeat -rfbauth ~/.vnc/passwd  -display :0
+
+root@xjutv:/home/xju/xrdp/xrdp# xrdp/xrdp --nodaemon -c xrdp/xrdp.ini --dump-config
+
+
+key mapping:
+xrdp_wm.c xrdp_wm_key
+lang.c get_key_info_from_scan_code
+which uses hard-coded gmap + struct xrdp_keymap *keymap
+
+e.g. a 30 -> 38 -> 0x0061 (97) sym?
+passes mod,chr(param1),sym(param2),scan_code(param3)(30) +  to mod_even = vnc.c lib_mod_event
+... which sends:
+C2S_KEY_EVENT
+0=up 1=down (?)
+2-byte padding
+key as 32bit (x keysym)
+
+x11vnc-us-us/x11vnc.c
+int handleKey(int rdpKeyCode, int rdpKeyEvent)
+
+mod_init(void)
+
+a    keys[30] = { X11_VNC_KEY_AUTO_REPEAT, 0x0061 };
+km-00000409.ini:
+Key38=97:97
+97=0x0061
+0x0061 in default keymap below = 'a'
+
+b    keys[48] = { X11_VNC_KEY_AUTO_REPEAT, 0x0062 };
+b in default keymap below is 0x0062
+
+xrdp_wm_key(struct xrdp_wm *self, int device_flags, int scan_code)
+
+                 device_flags + scan_code for:
+
+... so events below say:
+  16384 is down, 32768 is up
+  repeat is done by repeated down with no up in between
+    better to pass that on as repeated down+up just for keys
+    where that makes sense, all but:
+      caps - suppress repeated ups so just get one down and one up
+             no matter how long it is held down
+      shift, alt, ctrl, super - same
+  * do we ever want to send A not a? Does it depend on the modmap?
+
+#define X11_VNC_KEY_VALID = 0x01;
+#define X11_VNC_KEY_AUTO_REPEAT = 0x02;
+#define X11_VNC_KEY_IS_DOWN = 0x04;
+
+#define X11_VNC_KEY_PRESSED = 16384
+#define X11_VNC_KEY_RELEASED = 32768
+
+
+s = 42
+c = 29
+m = 56
+caps = 58
+
+
+a
+16384 30
+32768 30
+A
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 30
+32768 30
+32768 42
+s
+16384 42
+32768 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+16384 42
+32768 42
+c-a
+16384 29
+16384 30
+32768 30
+32768 29
+m-a
+16384 56
+16384 30
+32768 30
+32768 56
+caps
+16384 58
+32768 58
+16384 58
+32768 58
+  
+16384 58
+32768 58
+s-A
+16384 42
+16384 30
+32768 30
+32768 42
+off caps
+16384 58
+32768 58
+m-s-,
+16384 56
+16384 42
+16384 51
+32768 51
+32768 42
+32768 56
+tab
+16384 15
+32768 15
+f1
+16384 59
+32768 59
+16384 60
+32768 60
+16384 61
+32768 61
+16384 62
+32768 62
+16384 63
+32768 63
+16384 64
+32768 64
+16384 65
+32768 65
+16384 66
+32768 66
+16384 67
+32768 67
+16384 68
+32768 68
+16384 87
+32768 87
+16384 88
+32768 88
+home
+16640 71
+33024 71
+pgup
+16640 73
+33024 73
+pgdn
+16640 81
+33024 81
+end
+16640 79
+33024 79
+up
+16640 72
+33024 72
+right
+16640 77
+33024 77
+down
+16640 80
+33024 80
+left
+16640 75
+33024 75
+del
+16384 83
+32768 83
+back-space
+16384 14
+32768 14
+space
+16384 57
+32768 57
+s
+16384 42
+32768 42
+esc
+16384 1
+32768 1
+`
+16384 41
+32768 41
+~
+16384 42
+16384 41
+32768 41
+32768 42
+[
+16384 26
+32768 26
+]
+16384 27
+32768 27
+
+\
+16384 43
+32768 43
+right-m
+16640 56
+33024 56
+left-m
+16384 56
+32768 56
+keypad ins
+16640 82
+33024 82
+keypad del
+16640 83
+33024 83
+numlock
+16384 69
+32768 69
+kp end
+16384 79
+32768 79
+kp 1
+16384 58
+32768 58
+16384 79
+32768 79
+16384 58
+32768 58
+kp del
+16384 83
+32768 83
+
+abcdefghijklmnopqrstuvwxyz
+16384 30
+32768 30
+16384 48
+32768 48
+16384 46
+32768 46
+16384 32
+32768 32
+16384 18
+32768 18
+16384 33
+32768 33
+16384 34
+32768 34
+16384 35
+32768 35
+16384 23
+32768 23
+16384 36
+32768 36
+16384 37
+32768 37
+16384 38
+32768 38
+16384 50
+32768 50
+16384 49
+32768 49
+16384 24
+32768 24
+16384 25
+32768 25
+16384 16
+32768 16
+16384 19
+32768 19
+16384 31
+32768 31
+16384 20
+32768 20
+16384 22
+32768 22
+16384 47
+32768 47
+16384 17
+32768 17
+16384 45
+32768 45
+16384 21
+32768 21
+16384 44
+32768 44
+
+
+unicode?
+
+
+implement sync
+
+RFC 6143
+
+
+- fix server as us keyboard, by making ours a vnc-us module
+
+
+
+v default keymap:
+
+      9         0xff1b (Escape) 0x0000 (NoSymbol)       0xff1b (Escape)
+     10         0x0031 (1)      0x0021 (exclam) 0x0031 (1)      0x0021 (exclam)
+     11         0x0032 (2)      0x0040 (at)     0x0032 (2)      0x0040 (at)
+     12         0x0033 (3)      0x0023 (numbersign)     0x0033 (3)      0x0023 (numbersign)
+     13         0x0034 (4)      0x0024 (dollar) 0x0034 (4)      0x0024 (dollar)
+     14         0x0035 (5)      0x0025 (percent)        0x0035 (5)      0x0025 (percent)
+     15         0x0036 (6)      0x005e (asciicircum)    0x0036 (6)      0x005e (asciicircum)
+     16         0x0037 (7)      0x0026 (ampersand)      0x0037 (7)      0x0026 (ampersand)
+     17         0x0038 (8)      0x002a (asterisk)       0x0038 (8)      0x002a (asterisk)
+     18         0x0039 (9)      0x0028 (parenleft)      0x0039 (9)      0x0028 (parenleft)
+     19         0x0030 (0)      0x0029 (parenright)     0x0030 (0)      0x0029 (parenright)
+     20         0x002d (minus)  0x005f (underscore)     0x002d (minus)  0x005f (underscore)
+     21         0x003d (equal)  0x002b (plus)   0x003d (equal)  0x002b (plus)
+     22         0xff08 (BackSpace)      0xff08 (BackSpace)      0xff08 (BackSpace)      0xff08 (BackSpace)
+     23         0xff09 (Tab)    0xfe20 (ISO_Left_Tab)   0xff09 (Tab)    0xfe20 (ISO_Left_Tab)
+     24         0x0071 (q)      0x0051 (Q)      0x0071 (q)      0x0051 (Q)
+     25         0x0077 (w)      0x0057 (W)      0x0077 (w)      0x0057 (W)
+     26         0x0065 (e)      0x0045 (E)      0x0065 (e)      0x0045 (E)
+     27         0x0072 (r)      0x0052 (R)      0x0072 (r)      0x0052 (R)
+     28         0x0074 (t)      0x0054 (T)      0x0074 (t)      0x0054 (T)
+     29         0x0079 (y)      0x0059 (Y)      0x0079 (y)      0x0059 (Y)
+     30         0x0075 (u)      0x0055 (U)      0x0075 (u)      0x0055 (U)
+     31         0x0069 (i)      0x0049 (I)      0x0069 (i)      0x0049 (I)
+     32         0x006f (o)      0x004f (O)      0x006f (o)      0x004f (O)
+     33         0x0070 (p)      0x0050 (P)      0x0070 (p)      0x0050 (P)
+     34         0x005b (bracketleft)    0x007b (braceleft)      0x005b (bracketleft)    0x007b (braceleft)
+     35         0x005d (bracketright)   0x007d (braceright)     0x005d (bracketright)   0x007d (braceright)
+     36         0xff0d (Return) 0x0000 (NoSymbol)       0xff0d (Return)
+     37         0xffe3 (Control_L)      0x0000 (NoSymbol)       0xffe3 (Control_L)
+     38         0x0061 (a)      0x0041 (A)      0x0061 (a)      0x0041 (A)
+     39         0x0073 (s)      0x0053 (S)      0x0073 (s)      0x0053 (S)
+     40         0x0064 (d)      0x0044 (D)      0x0064 (d)      0x0044 (D)
+     41         0x0066 (f)      0x0046 (F)      0x0066 (f)      0x0046 (F)
+     42         0x0067 (g)      0x0047 (G)      0x0067 (g)      0x0047 (G)
+     43         0x0068 (h)      0x0048 (H)      0x0068 (h)      0x0048 (H)
+     44         0x006a (j)      0x004a (J)      0x006a (j)      0x004a (J)
+     45         0x006b (k)      0x004b (K)      0x006b (k)      0x004b (K)
+     46         0x006c (l)      0x004c (L)      0x006c (l)      0x004c (L)
+     47         0x003b (semicolon)      0x003a (colon)  0x003b (semicolon)      0x003a (colon)
+     48         0x0027 (apostrophe)     0x0022 (quotedbl)       0x0027 (apostrophe)     0x0022 (quotedbl)
+     49         0x0060 (grave)  0x007e (asciitilde)     0x0060 (grave)  0x007e (asciitilde)
+     50         0xffe1 (Shift_L)        0x0000 (NoSymbol)       0xffe1 (Shift_L)
+     51         0x005c (backslash)      0x007c (bar)    0x005c (backslash)      0x007c (bar)
+     52         0x007a (z)      0x005a (Z)      0x007a (z)      0x005a (Z)
+     53         0x0078 (x)      0x0058 (X)      0x0078 (x)      0x0058 (X)
+     54         0x0063 (c)      0x0043 (C)      0x0063 (c)      0x0043 (C)
+     55         0x0076 (v)      0x0056 (V)      0x0076 (v)      0x0056 (V)
+     56         0x0062 (b)      0x0042 (B)      0x0062 (b)      0x0042 (B)
+     57         0x006e (n)      0x004e (N)      0x006e (n)      0x004e (N)
+     58         0x006d (m)      0x004d (M)      0x006d (m)      0x004d (M)
+     59         0x002c (comma)  0x003c (less)   0x002c (comma)  0x003c (less)
+     60         0x002e (period) 0x003e (greater)        0x002e (period) 0x003e (greater)
+     61         0x002f (slash)  0x003f (question)       0x002f (slash)  0x003f (question)
+     62         0xffe2 (Shift_R)        0x0000 (NoSymbol)       0xffe2 (Shift_R)
+     63         0xffaa (KP_Multiply)    0xffaa (KP_Multiply)    0xffaa (KP_Multiply)    0xffaa (KP_Multiply)    0xffaa (KP_Multiply)   0xffaa (KP_Multiply)    0x1008fe21 (XF86ClearGrab)
+     64         0xffe9 (Alt_L)  0xffe7 (Meta_L) 0xffe9 (Alt_L)  0xffe7 (Meta_L)
+     65         0x0020 (space)  0x0000 (NoSymbol)       0x0020 (space)
+     66         0xffe5 (Caps_Lock)      0x0000 (NoSymbol)       0xffe5 (Caps_Lock)
+     67         0xffbe (F1)     0xffbe (F1)     0xffbe (F1)     0xffbe (F1)     0xffbe (F1)     0xffbe (F1)     0x1008fe01 (XF86Switch_VT_1)
+     68         0xffbf (F2)     0xffbf (F2)     0xffbf (F2)     0xffbf (F2)     0xffbf (F2)     0xffbf (F2)     0x1008fe02 (XF86Switch_VT_2)
+     69         0xffc0 (F3)     0xffc0 (F3)     0xffc0 (F3)     0xffc0 (F3)     0xffc0 (F3)     0xffc0 (F3)     0x1008fe03 (XF86Switch_VT_3)
+     70         0xffc1 (F4)     0xffc1 (F4)     0xffc1 (F4)     0xffc1 (F4)     0xffc1 (F4)     0xffc1 (F4)     0x1008fe04 (XF86Switch_VT_4)
+     71         0xffc2 (F5)     0xffc2 (F5)     0xffc2 (F5)     0xffc2 (F5)     0xffc2 (F5)     0xffc2 (F5)     0x1008fe05 (XF86Switch_VT_5)
+     72         0xffc3 (F6)     0xffc3 (F6)     0xffc3 (F6)     0xffc3 (F6)     0xffc3 (F6)     0xffc3 (F6)     0x1008fe06 (XF86Switch_VT_6)
+     73         0xffc4 (F7)     0xffc4 (F7)     0xffc4 (F7)     0xffc4 (F7)     0xffc4 (F7)     0xffc4 (F7)     0x1008fe07 (XF86Switch_VT_7)
+     74         0xffc5 (F8)     0xffc5 (F8)     0xffc5 (F8)     0xffc5 (F8)     0xffc5 (F8)     0xffc5 (F8)     0x1008fe08 (XF86Switch_VT_8)
+     75         0xffc6 (F9)     0xffc6 (F9)     0xffc6 (F9)     0xffc6 (F9)     0xffc6 (F9)     0xffc6 (F9)     0x1008fe09 (XF86Switch_VT_9)
+     76         0xffc7 (F10)    0xffc7 (F10)    0xffc7 (F10)    0xffc7 (F10)    0xffc7 (F10)    0xffc7 (F10)    0x1008fe0a (XF86Switch_VT_10)
+     77         0xff7f (Num_Lock)       0x0000 (NoSymbol)       0xff7f (Num_Lock)
+     78         0xff14 (Scroll_Lock)    0x0000 (NoSymbol)       0xff14 (Scroll_Lock)
+     79         0xff95 (KP_Home)        0xffb7 (KP_7)   0xff95 (KP_Home)        0xffb7 (KP_7)
+     80         0xff97 (KP_Up)  0xffb8 (KP_8)   0xff97 (KP_Up)  0xffb8 (KP_8)
+     81         0xff9a (KP_Prior)       0xffb9 (KP_9)   0xff9a (KP_Prior)       0xffb9 (KP_9)
+     82         0xffad (KP_Subtract)    0xffad (KP_Subtract)    0xffad (KP_Subtract)    0xffad (KP_Subtract)    0xffad (KP_Subtract)   0xffad (KP_Subtract)    0x1008fe23 (XF86Prev_VMode)
+     83         0xff96 (KP_Left)        0xffb4 (KP_4)   0xff96 (KP_Left)        0xffb4 (KP_4)
+     84         0xff9d (KP_Begin)       0xffb5 (KP_5)   0xff9d (KP_Begin)       0xffb5 (KP_5)
+     85         0xff98 (KP_Right)       0xffb6 (KP_6)   0xff98 (KP_Right)       0xffb6 (KP_6)
+     86         0xffab (KP_Add) 0xffab (KP_Add) 0xffab (KP_Add) 0xffab (KP_Add) 0xffab (KP_Add) 0xffab (KP_Add) 0x1008fe22 (XF86Next_VMode)
+     87         0xff9c (KP_End) 0xffb1 (KP_1)   0xff9c (KP_End) 0xffb1 (KP_1)
+     88         0xff99 (KP_Down)        0xffb2 (KP_2)   0xff99 (KP_Down)        0xffb2 (KP_2)
+     89         0xff9b (KP_Next)        0xffb3 (KP_3)   0xff9b (KP_Next)        0xffb3 (KP_3)
+     90         0xff9e (KP_Insert)      0xffb0 (KP_0)   0xff9e (KP_Insert)      0xffb0 (KP_0)
+     91         0xff9f (KP_Delete)      0xffae (KP_Decimal)     0xff9f (KP_Delete)      0xffae (KP_Decimal)
+     92         0xfe03 (ISO_Level3_Shift)       0x0000 (NoSymbol)       0xfe03 (ISO_Level3_Shift)
+     93    
+     94         0x003c (less)   0x003e (greater)        0x003c (less)   0x003e (greater)        0x007c (bar)    0x00a6 (brokenbar)     0x007c (bar)
+     95         0xffc8 (F11)    0xffc8 (F11)    0xffc8 (F11)    0xffc8 (F11)    0xffc8 (F11)    0xffc8 (F11)    0x1008fe0b (XF86Switch_VT_11)
+     96         0xffc9 (F12)    0xffc9 (F12)    0xffc9 (F12)    0xffc9 (F12)    0xffc9 (F12)    0xffc9 (F12)    0x1008fe0c (XF86Switch_VT_12)
+     97    
+     98         0xff26 (Katakana)       0x0000 (NoSymbol)       0xff26 (Katakana)
+     99         0xff25 (Hiragana)       0x0000 (NoSymbol)       0xff25 (Hiragana)
+    100         0xff23 (Henkan_Mode)    0x0000 (NoSymbol)       0xff23 (Henkan_Mode)
+    101         0xff27 (Hiragana_Katakana)      0x0000 (NoSymbol)       0xff27 (Hiragana_Katakana)
+    102         0xff22 (Muhenkan)       0x0000 (NoSymbol)       0xff22 (Muhenkan)
+    103    
+    104         0xff8d (KP_Enter)       0x0000 (NoSymbol)       0xff8d (KP_Enter)
+    105         0xffe4 (Control_R)      0x0000 (NoSymbol)       0xffe4 (Control_R)
+    106         0xffaf (KP_Divide)      0xffaf (KP_Divide)      0xffaf (KP_Divide)      0xffaf (KP_Divide)      0xffaf (KP_Divide)     0xffaf (KP_Divide)      0x1008fe20 (XF86Ungrab)
+    107         0xff61 (Print)  0xff15 (Sys_Req)        0xff61 (Print)  0xff15 (Sys_Req)
+    108         0xffea (Alt_R)  0xffe8 (Meta_R) 0xffea (Alt_R)  0xffe8 (Meta_R)
+    109         0xff0a (Linefeed)       0x0000 (NoSymbol)       0xff0a (Linefeed)
+    110         0xff50 (Home)   0x0000 (NoSymbol)       0xff50 (Home)
+    111         0xff52 (Up)     0x0000 (NoSymbol)       0xff52 (Up)
+    112         0xff55 (Prior)  0x0000 (NoSymbol)       0xff55 (Prior)
+    113         0xff51 (Left)   0x0000 (NoSymbol)       0xff51 (Left)
+    114         0xff53 (Right)  0x0000 (NoSymbol)       0xff53 (Right)
+    115         0xff57 (End)    0x0000 (NoSymbol)       0xff57 (End)
+    116         0xff54 (Down)   0x0000 (NoSymbol)       0xff54 (Down)
+    117         0xff56 (Next)   0x0000 (NoSymbol)       0xff56 (Next)
+    118         0xff63 (Insert) 0x0000 (NoSymbol)       0xff63 (Insert)
+    119         0xffff (Delete) 0x0000 (NoSymbol)       0xffff (Delete)
+    120    
+    121         0x1008ff12 (XF86AudioMute)      0x0000 (NoSymbol)       0x1008ff12 (XF86AudioMute)
+    122         0x1008ff11 (XF86AudioLowerVolume)       0x0000 (NoSymbol)       0x1008ff11 (XF86AudioLowerVolume)
+    123         0x1008ff13 (XF86AudioRaiseVolume)       0x0000 (NoSymbol)       0x1008ff13 (XF86AudioRaiseVolume)
+    124         0x1008ff2a (XF86PowerOff)       0x0000 (NoSymbol)       0x1008ff2a (XF86PowerOff)
+    125         0xffbd (KP_Equal)       0x0000 (NoSymbol)       0xffbd (KP_Equal)
+    126         0x00b1 (plusminus)      0x0000 (NoSymbol)       0x00b1 (plusminus)
+    127         0xff13 (Pause)  0xff6b (Break)  0xff13 (Pause)  0xff6b (Break)
+    128         0x1008ff4a (XF86LaunchA)        0x0000 (NoSymbol)       0x1008ff4a (XF86LaunchA)
+    129         0xffae (KP_Decimal)     0xffae (KP_Decimal)     0xffae (KP_Decimal)     0xffae (KP_Decimal)
+    130         0xff31 (Hangul) 0x0000 (NoSymbol)       0xff31 (Hangul)
+    131         0xff34 (Hangul_Hanja)   0x0000 (NoSymbol)       0xff34 (Hangul_Hanja)
+    132    
+    133         0xffeb (Super_L)        0x0000 (NoSymbol)       0xffeb (Super_L)
+    134         0xffec (Super_R)        0x0000 (NoSymbol)       0xffec (Super_R)
+    135         0xff67 (Menu)   0x0000 (NoSymbol)       0xff67 (Menu)
+    136         0xff69 (Cancel) 0x0000 (NoSymbol)       0xff69 (Cancel)
+    137         0xff66 (Redo)   0x0000 (NoSymbol)       0xff66 (Redo)
+    138         0x1005ff70 (SunProps)   0x0000 (NoSymbol)       0x1005ff70 (SunProps)
+    139         0xff65 (Undo)   0x0000 (NoSymbol)       0xff65 (Undo)
+    140         0x1005ff71 (SunFront)   0x0000 (NoSymbol)       0x1005ff71 (SunFront)
+    141         0x1008ff57 (XF86Copy)   0x0000 (NoSymbol)       0x1008ff57 (XF86Copy)
+    142         0x1008ff6b (XF86Open)   0x0000 (NoSymbol)       0x1008ff6b (XF86Open)
+    143         0x1008ff6d (XF86Paste)  0x0000 (NoSymbol)       0x1008ff6d (XF86Paste)
+    144         0xff68 (Find)   0x0000 (NoSymbol)       0xff68 (Find)
+    145         0x1008ff58 (XF86Cut)    0x0000 (NoSymbol)       0x1008ff58 (XF86Cut)
+    146         0xff6a (Help)   0x0000 (NoSymbol)       0xff6a (Help)
+    147         0x1008ff65 (XF86MenuKB) 0x0000 (NoSymbol)       0x1008ff65 (XF86MenuKB)
+    148         0x1008ff1d (XF86Calculator)     0x0000 (NoSymbol)       0x1008ff1d (XF86Calculator)
+    149    
+    150         0x1008ff2f (XF86Sleep)  0x0000 (NoSymbol)       0x1008ff2f (XF86Sleep)
+    151         0x1008ff2b (XF86WakeUp) 0x0000 (NoSymbol)       0x1008ff2b (XF86WakeUp)
+    152         0x1008ff5d (XF86Explorer)       0x0000 (NoSymbol)       0x1008ff5d (XF86Explorer)
+    153         0x1008ff7b (XF86Send)   0x0000 (NoSymbol)       0x1008ff7b (XF86Send)
+    154    
+    155         0x1008ff8a (XF86Xfer)   0x0000 (NoSymbol)       0x1008ff8a (XF86Xfer)
+    156         0x1008ff41 (XF86Launch1)        0x0000 (NoSymbol)       0x1008ff41 (XF86Launch1)
+    157         0x1008ff42 (XF86Launch2)        0x0000 (NoSymbol)       0x1008ff42 (XF86Launch2)
+    158         0x1008ff2e (XF86WWW)    0x0000 (NoSymbol)       0x1008ff2e (XF86WWW)
+    159         0x1008ff5a (XF86DOS)    0x0000 (NoSymbol)       0x1008ff5a (XF86DOS)
+    160         0x1008ff2d (XF86ScreenSaver)    0x0000 (NoSymbol)       0x1008ff2d (XF86ScreenSaver)
+    161         0x1008ff74 (XF86RotateWindows)  0x0000 (NoSymbol)       0x1008ff74 (XF86RotateWindows)
+    162         0x1008ff7f (XF86TaskPane)       0x0000 (NoSymbol)       0x1008ff7f (XF86TaskPane)
+    163         0x1008ff19 (XF86Mail)   0x0000 (NoSymbol)       0x1008ff19 (XF86Mail)
+    164         0x1008ff30 (XF86Favorites)      0x0000 (NoSymbol)       0x1008ff30 (XF86Favorites)
+    165         0x1008ff33 (XF86MyComputer)     0x0000 (NoSymbol)       0x1008ff33 (XF86MyComputer)
+    166         0x1008ff26 (XF86Back)   0x0000 (NoSymbol)       0x1008ff26 (XF86Back)
+    167         0x1008ff27 (XF86Forward)        0x0000 (NoSymbol)       0x1008ff27 (XF86Forward)
+    168    
+    169         0x1008ff2c (XF86Eject)  0x0000 (NoSymbol)       0x1008ff2c (XF86Eject)
+    170         0x1008ff2c (XF86Eject)  0x1008ff2c (XF86Eject)  0x1008ff2c (XF86Eject)  0x1008ff2c (XF86Eject)
+    171         0x1008ff17 (XF86AudioNext)      0x0000 (NoSymbol)       0x1008ff17 (XF86AudioNext)
+    172         0x1008ff14 (XF86AudioPlay)      0x1008ff31 (XF86AudioPause)     0x1008ff14 (XF86AudioPlay)      0x1008ff31 (XF86AudioPause)
+    173         0x1008ff16 (XF86AudioPrev)      0x0000 (NoSymbol)       0x1008ff16 (XF86AudioPrev)
+    174         0x1008ff15 (XF86AudioStop)      0x1008ff2c (XF86Eject)  0x1008ff15 (XF86AudioStop)      0x1008ff2c (XF86Eject)
+    175         0x1008ff1c (XF86AudioRecord)    0x0000 (NoSymbol)       0x1008ff1c (XF86AudioRecord)
+    176         0x1008ff3e (XF86AudioRewind)    0x0000 (NoSymbol)       0x1008ff3e (XF86AudioRewind)
+    177         0x1008ff6e (XF86Phone)  0x0000 (NoSymbol)       0x1008ff6e (XF86Phone)
+    178    
+    179         0x1008ff81 (XF86Tools)  0x0000 (NoSymbol)       0x1008ff81 (XF86Tools)
+    180         0x1008ff18 (XF86HomePage)       0x0000 (NoSymbol)       0x1008ff18 (XF86HomePage)
+    181         0x1008ff73 (XF86Reload) 0x0000 (NoSymbol)       0x1008ff73 (XF86Reload)
+    182         0x1008ff56 (XF86Close)  0x0000 (NoSymbol)       0x1008ff56 (XF86Close)
+    183    
+    184    
+    185         0x1008ff78 (XF86ScrollUp)       0x0000 (NoSymbol)       0x1008ff78 (XF86ScrollUp)
+    186         0x1008ff79 (XF86ScrollDown)     0x0000 (NoSymbol)       0x1008ff79 (XF86ScrollDown)
+    187         0x0028 (parenleft)      0x0000 (NoSymbol)       0x0028 (parenleft)
+    188         0x0029 (parenright)     0x0000 (NoSymbol)       0x0029 (parenright)
+    189         0x1008ff68 (XF86New)    0x0000 (NoSymbol)       0x1008ff68 (XF86New)
+    190         0xff66 (Redo)   0x0000 (NoSymbol)       0xff66 (Redo)
+    191         0x1008ff81 (XF86Tools)  0x0000 (NoSymbol)       0x1008ff81 (XF86Tools)
+    192         0x1008ff45 (XF86Launch5)        0x0000 (NoSymbol)       0x1008ff45 (XF86Launch5)
+    193         0x1008ff46 (XF86Launch6)        0x0000 (NoSymbol)       0x1008ff46 (XF86Launch6)
+    194         0x1008ff47 (XF86Launch7)        0x0000 (NoSymbol)       0x1008ff47 (XF86Launch7)
+    195         0x1008ff48 (XF86Launch8)        0x0000 (NoSymbol)       0x1008ff48 (XF86Launch8)
+    196         0x1008ff49 (XF86Launch9)        0x0000 (NoSymbol)       0x1008ff49 (XF86Launch9)
+    197    
+    198         0x1008ffb2 (XF86AudioMicMute)   0x0000 (NoSymbol)       0x1008ffb2 (XF86AudioMicMute)
+    199         0x1008ffa9 (XF86TouchpadToggle) 0x0000 (NoSymbol)       0x1008ffa9 (XF86TouchpadToggle)
+    200         0x1008ffb0 (XF86TouchpadOn)     0x0000 (NoSymbol)       0x1008ffb0 (XF86TouchpadOn)
+    201         0x1008ffb1 (XF86TouchpadOff)    0x0000 (NoSymbol)       0x1008ffb1 (XF86TouchpadOff)
+    202    
+    203         0xff7e (Mode_switch)    0x0000 (NoSymbol)       0xff7e (Mode_switch)
+    204         0x0000 (NoSymbol)       0xffe9 (Alt_L)  0x0000 (NoSymbol)       0xffe9 (Alt_L)
+    205         0x0000 (NoSymbol)       0xffe7 (Meta_L) 0x0000 (NoSymbol)       0xffe7 (Meta_L)
+    206         0x0000 (NoSymbol)       0xffeb (Super_L)        0x0000 (NoSymbol)       0xffeb (Super_L)
+    207         0x0000 (NoSymbol)       0xffed (Hyper_L)        0x0000 (NoSymbol)       0xffed (Hyper_L)
+    208         0x1008ff14 (XF86AudioPlay)      0x0000 (NoSymbol)       0x1008ff14 (XF86AudioPlay)
+    209         0x1008ff31 (XF86AudioPause)     0x0000 (NoSymbol)       0x1008ff31 (XF86AudioPause)
+    210         0x1008ff43 (XF86Launch3)        0x0000 (NoSymbol)       0x1008ff43 (XF86Launch3)
+    211         0x1008ff44 (XF86Launch4)        0x0000 (NoSymbol)       0x1008ff44 (XF86Launch4)
+    212         0x1008ff4b (XF86LaunchB)        0x0000 (NoSymbol)       0x1008ff4b (XF86LaunchB)
+    213         0x1008ffa7 (XF86Suspend)        0x0000 (NoSymbol)       0x1008ffa7 (XF86Suspend)
+    214         0x1008ff56 (XF86Close)  0x0000 (NoSymbol)       0x1008ff56 (XF86Close)
+    215         0x1008ff14 (XF86AudioPlay)      0x0000 (NoSymbol)       0x1008ff14 (XF86AudioPlay)
+    216         0x1008ff97 (XF86AudioForward)   0x0000 (NoSymbol)       0x1008ff97 (XF86AudioForward)
+    217    
+    218         0xff61 (Print)  0x0000 (NoSymbol)       0xff61 (Print)
+    219    
+    220         0x1008ff8f (XF86WebCam) 0x0000 (NoSymbol)       0x1008ff8f (XF86WebCam)
+    221    
+    222    
+    223         0x1008ff19 (XF86Mail)   0x0000 (NoSymbol)       0x1008ff19 (XF86Mail)
+    224         0x1008ff8e (XF86Messenger)      0x0000 (NoSymbol)       0x1008ff8e (XF86Messenger)
+    225         0x1008ff1b (XF86Search) 0x0000 (NoSymbol)       0x1008ff1b (XF86Search)
+    226         0x1008ff5f (XF86Go)     0x0000 (NoSymbol)       0x1008ff5f (XF86Go)
+    227         0x1008ff3c (XF86Finance)        0x0000 (NoSymbol)       0x1008ff3c (XF86Finance)
+    228         0x1008ff5e (XF86Game)   0x0000 (NoSymbol)       0x1008ff5e (XF86Game)
+    229         0x1008ff36 (XF86Shop)   0x0000 (NoSymbol)       0x1008ff36 (XF86Shop)
+    230    
+    231         0xff69 (Cancel) 0x0000 (NoSymbol)       0xff69 (Cancel)
+    232         0x1008ff03 (XF86MonBrightnessDown)      0x0000 (NoSymbol)       0x1008ff03 (XF86MonBrightnessDown)
+    233         0x1008ff02 (XF86MonBrightnessUp)        0x0000 (NoSymbol)       0x1008ff02 (XF86MonBrightnessUp)
+    234         0x1008ff32 (XF86AudioMedia)     0x0000 (NoSymbol)       0x1008ff32 (XF86AudioMedia)
+    235         0x1008ff59 (XF86Display)        0x0000 (NoSymbol)       0x1008ff59 (XF86Display)
+    236         0x1008ff04 (XF86KbdLightOnOff)  0x0000 (NoSymbol)       0x1008ff04 (XF86KbdLightOnOff)
+    237         0x1008ff06 (XF86KbdBrightnessDown)      0x0000 (NoSymbol)       0x1008ff06 (XF86KbdBrightnessDown)
+    238         0x1008ff05 (XF86KbdBrightnessUp)        0x0000 (NoSymbol)       0x1008ff05 (XF86KbdBrightnessUp)
+    239         0x1008ff7b (XF86Send)   0x0000 (NoSymbol)       0x1008ff7b (XF86Send)
+    240         0x1008ff72 (XF86Reply)  0x0000 (NoSymbol)       0x1008ff72 (XF86Reply)
+    241         0x1008ff90 (XF86MailForward)    0x0000 (NoSymbol)       0x1008ff90 (XF86MailForward)
+    242         0x1008ff77 (XF86Save)   0x0000 (NoSymbol)       0x1008ff77 (XF86Save)
+    243         0x1008ff5b (XF86Documents)      0x0000 (NoSymbol)       0x1008ff5b (XF86Documents)
+    244         0x1008ff93 (XF86Battery)        0x0000 (NoSymbol)       0x1008ff93 (XF86Battery)
+    245         0x1008ff94 (XF86Bluetooth)      0x0000 (NoSymbol)       0x1008ff94 (XF86Bluetooth)
+    246         0x1008ff95 (XF86WLAN)   0x0000 (NoSymbol)       0x1008ff95 (XF86WLAN)
+    247    
+    248    
+    249    
+    250    
+    251    
+    252    
+    253    
+    254         0x1008ffb4 (XF86WWAN)   0x0000 (NoSymbol)       0x1008ffb4 (XF86WWAN)
+    255         0x1008ffb5 (XF86RFKill) 0x0000 (NoSymbol)       0x1008ffb5 (XF86RFKill)
+
+
+... but tightvnc server has keymap:
+
+xju@xjutv:~$ xmodmap -display localhost:1 -pk
+There are 2 KeySyms per KeyCode; KeyCodes range from 8 to 255.
+
+    KeyCode     Keysym (Keysym) ...
+    Value       Value   (Name)  ...
+
+      8         0xffe3 (Control_L)
+      9         0xffe4 (Control_R)
+     10         0xffe1 (Shift_L)
+     11         0xffe2 (Shift_R)
+     12         0xffe7 (Meta_L)
+     13         0xffe8 (Meta_R)
+     14         0xffe9 (Alt_L)
+     15         0xffea (Alt_R)
+     16         0x0020 (space)
+     17         0x0030 (0)      0x0029 (parenright)
+     18         0x0031 (1)      0x0021 (exclam)
+     19         0x0032 (2)      0x0040 (at)
+     20         0x0033 (3)      0x0023 (numbersign)
+     21         0x0034 (4)      0x0024 (dollar)
+     22         0x0035 (5)      0x0025 (percent)
+     23         0x0036 (6)      0x005e (asciicircum)
+     24         0x0037 (7)      0x0026 (ampersand)
+     25         0x0038 (8)      0x002a (asterisk)
+     26         0x0039 (9)      0x0028 (parenleft)
+     27         0x002d (minus)  0x005f (underscore)
+     28         0x003d (equal)  0x002b (plus)
+     29         0x005b (bracketleft)    0x007b (braceleft)
+     30         0x005d (bracketright)   0x007d (braceright)
+     31         0x003b (semicolon)      0x003a (colon)
+     32         0x0027 (apostrophe)     0x0022 (quotedbl)
+     33         0x0060 (grave)  0x007e (asciitilde)
+     34         0x002c (comma)  0x003c (less)
+     35         0x002e (period) 0x003e (greater)
+     36         0x002f (slash)  0x003f (question)
+     37         0x005c (backslash)      0x007c (bar)
+     38         0x0061 (a)      0x0041 (A)
+     39         0x0062 (b)      0x0042 (B)
+     40         0x0063 (c)      0x0043 (C)
+     41         0x0064 (d)      0x0044 (D)
+     42         0x0065 (e)      0x0045 (E)
+     43         0x0066 (f)      0x0046 (F)
+     44         0x0067 (g)      0x0047 (G)
+     45         0x0068 (h)      0x0048 (H)
+     46         0x0069 (i)      0x0049 (I)
+     47         0x006a (j)      0x004a (J)
+     48         0x006b (k)      0x004b (K)
+     49         0x006c (l)      0x004c (L)
+     50         0x006d (m)      0x004d (M)
+     51         0x006e (n)      0x004e (N)
+     52         0x006f (o)      0x004f (O)
+     53         0x0070 (p)      0x0050 (P)
+     54         0x0071 (q)      0x0051 (Q)
+     55         0x0072 (r)      0x0052 (R)
+     56         0x0073 (s)      0x0053 (S)
+     57         0x0074 (t)      0x0054 (T)
+     58         0x0075 (u)      0x0055 (U)
+     59         0x0076 (v)      0x0056 (V)
+     60         0x0077 (w)      0x0057 (W)
+     61         0x0078 (x)      0x0058 (X)
+     62         0x0079 (y)      0x0059 (Y)
+     63         0x007a (z)      0x005a (Z)
+     64         0xff08 (BackSpace)
+     65         0xff0d (Return)
+     66         0xff09 (Tab)
+     67         0xff1b (Escape)
+     68         0xffff (Delete)
+     69         0xff50 (Home)
+     70         0xff57 (End)
+     71         0xff55 (Prior)
+     72         0xff56 (Next)
+     73         0xff52 (Up)
+     74         0xff54 (Down)
+     75         0xff51 (Left)
+     76         0xff53 (Right)
+     77         0xffbe (F1)
+     78         0xffbf (F2)
+     79         0xffc0 (F3)
+     80         0xffc1 (F4)
+     81         0xffc2 (F5)
+     82         0xffc3 (F6)
+     83         0xffc4 (F7)
+     84         0xffc5 (F8)
+     85         0xffc6 (F9)
+     86         0xffc7 (F10)
+     87         0xffc8 (F11)
+     88         0xffc9 (F12)
+     89    
+     90    
+     91    
+     92    
+     93    
+     94    
+     95    
+     96    
+     97    
+     98    
+     99    
+    100    
+    101    
+    102    
+    103    
+    104    
+    105    
+    106    
+    107    
+    108    
+    109    
+    110    
+    111    
+    112    
+    113    
+    114    
+    115    
+    116    
+    117    
+    118    
+    119    
+    120    
+    121    
+    122    
+    123    
+    124    
+    125    
+    126    
+    127    
+    128    
+    129    
+    130    
+    131    
+    132    
+    133    
+    134    
+    135    
+    136    
+    137    
+    138    
+    139    
+    140    
+    141    
+    142    
+    143    
+    144    
+    145    
+    146    
+    147    
+    148    
+    149    
+    150    
+    151    
+    152    
+    153    
+    154    
+    155    
+    156    
+    157    
+    158    
+    159    
+    160    
+    161    
+    162    
+    163    
+    164    
+    165    
+    166    
+    167    
+    168    
+    169    
+    170    
+    171    
+    172    
+    173    
+    174    
+    175    
+    176    
+    177    
+    178    
+    179    
+    180    
+    181    
+    182    
+    183    
+    184    
+    185    
+    186    
+    187    
+    188    
+    189    
+    190    
+    191    
+    192    
+    193    
+    194    
+    195    
+    196    
+    197    
+    198    
+    199    
+    200    
+    201    
+    202    
+    203    
+    204    
+    205    
+    206    
+    207    
+    208    
+    209    
+    210    
+    211    
+    212    
+    213    
+    214    
+    215    
+    216    
+    217    
+    218    
+    219    
+    220    
+    221    
+    222    
+    223    
+    224    
+    225    
+    226    
+    227    
+    228    
+    229    
+    230    
+    231    
+    232    
+    233    
+    234    
+    235    
+    236    
+    237    
+    238    
+    239    
+    240    
+    241    
+    242    
+    243    
+    244    
+    245    
+    246    
+    247    
+    248    
+    249    
+    250    
+    251    
+    252    
+    253    
+    254    
+    255    
+
+... so need to do with x11vnc

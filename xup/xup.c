@@ -1723,6 +1723,7 @@ mod_init(void)
     mod->mod_server_monitor_full_invalidate
         = lib_send_server_monitor_full_invalidate;
     mod->mod_server_version_message = lib_send_server_version_message;
+    mod->mod_handle_key = 0;
     return (tintptr) mod;
 }
 

@@ -30,14 +30,126 @@
 #include <config_ac.h>
 #endif
 
-#include "vnc.h"
-#include "vnc_clip.h"
-#include "rfb.h"
+#include "../vnc/vnc.h"
 #include "log.h"
 #include "trans.h"
 #include "ssl_calls.h"
 #include "string_calls.h"
 #include "xrdp_client_info.h"
+#include <stdio.h>
+#include <strings.h>
+#include <inttypes.h>
+
+typedef enum
+{
+  X11_VNC_KEY_VALID=0x01,
+  X11_VNC_KEY_AUTO_REPEAT=0x02,
+  X11_VNC_KEY_IS_DOWN=0x04,
+  X11_VNC_KEY_CAPS_LOCKABLE=0x08,
+  X11_VNC_KEY_NUM_LOCKABLE=0x10,
+  X11_VNC_KEY_IS_CAPSLOCK=0x20,
+  X11_VNC_KEY_IS_NUMLOCK=0x40,
+} X11VncKeyAttrs;
+
+typedef enum
+{
+  X11_VNC_KEY_RELEASED=0,
+  X11_VNC_KEY_PRESSED=1
+} X11VncKeyDirection;
+
+struct x11vnckey
+{
+  X11VncKeyAttrs attrs; // X11_VNC_KEY_* per rdp keycode
+  uint32_t        vncKeyCode; // if appropriate based on keyState
+  uint32_t        shiftedVncKeyCode;  // if appropriate based on keyState
+};
+
+static int keyAutoRepeats(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_AUTO_REPEAT;
+}
+static int keyIsCapsLockable(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_CAPS_LOCKABLE;
+}
+static int keyIsNumLockable(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_NUM_LOCKABLE;
+}
+static int keyIsCapsLock(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_CAPSLOCK;
+}
+static int keyIsNumLock(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_NUMLOCK;
+}
+static int keyIsDown(const struct x11vnckey* const k)
+{
+  return k->attrs & X11_VNC_KEY_IS_DOWN;
+}
+static void setKeyDown(struct x11vnckey* const k)
+{
+  k->attrs |= X11_VNC_KEY_IS_DOWN;
+}
+static void setKeyUp(struct x11vnckey* const k)
+{
+  k->attrs &= ~X11_VNC_KEY_IS_DOWN;
+}
+struct x11vnc
+{
+  struct vnc _;
+  // second 256 keys maps windows event with 0x100 bit set, e.g. kp /
+  // which has same rdp keycode as main / but 0x100 set in event
+  struct x11vnckey keys[2*256];
+  int    capsLocked;
+  int    numLocked;
+};
+
+/* Client-to-server messages */
+enum c2s
+{
+    C2S_SET_PIXEL_FORMAT = 0,
+    C2S_SET_ENCODINGS = 2,
+    C2S_FRAMEBUFFER_UPDATE_REQUEST = 3,
+    C2S_KEY_EVENT = 4,
+    C2S_POINTER_EVENT = 5,
+    C2S_CLIENT_CUT_TEXT = 6,
+};
+
+/* Server to client messages */
+enum s2c
+{
+    S2C_FRAMEBUFFER_UPDATE = 0,
+    S2C_SET_COLOUR_MAP_ENTRIES = 1,
+    S2C_BELL = 2,
+    S2C_SERVER_CUT_TEXT = 3
+};
+
+/* Encodings and pseudo-encodings
+ *
+ * The RFC uses a signed type for these. We use an unsigned type as the
+ * binary representation for the negative values is standardised in C
+ * (which it wouldn't be for an enum value)
+ */
+
+typedef uint32_t encoding_type;
+
+#define ENC_RAW                   (encoding_type)0
+#define ENC_COPY_RECT             (encoding_type)1
+#define ENC_CURSOR                (encoding_type)-239
+#define ENC_DESKTOP_SIZE          (encoding_type)-223
+#define ENC_EXTENDED_DESKTOP_SIZE (encoding_type)-308
+
+/* Messages for ExtendedDesktopSize status code */
+static const char *eds_status_msg[] =
+{
+    /* 0 */ "No error",
+    /* 1 */ "Resize is administratively prohibited",
+    /* 2 */ "Out of resources",
+    /* 3 */ "Invalid screen layout",
+    /* others */ "Unknown code"
+};
 
 /* elements in above list */
 #define EDS_STATUS_MSG_COUNT \
@@ -49,8 +161,11 @@ enum
     MSK_EXTENDED_DESKTOP_SIZE = (1 << 0)
 };
 
+static int
+lib_mod_process_message(struct vnc *v, struct stream *s);
+
 /******************************************************************************/
-int
+static int
 lib_send_copy(struct vnc *v, struct stream *s)
 {
     return trans_write_copy_s(v->trans, s);
@@ -94,7 +209,6 @@ rfbHashEncryptBytes(char *bytes, const char *passwd)
     /* create password hash from password */
     passwd_bytes = g_strlen(passwd);
     sha1 = ssl_sha1_info_create();
-    ssl_sha1_clear(sha1);
     ssl_sha1_transform(sha1, "xrdp_vnc", 8);
     ssl_sha1_transform(sha1, passwd, passwd_bytes);
     ssl_sha1_transform(sha1, passwd, passwd_bytes);
@@ -105,6 +219,160 @@ rfbHashEncryptBytes(char *bytes, const char *passwd)
                (tui8)passwd_hash[2], (tui8)passwd_hash[3]);
     passwd_hash_text[39] = 0;
     rfbEncryptBytes(bytes, passwd_hash_text);
+}
+
+/******************************************************************************/
+static int
+lib_process_channel_data(struct vnc *v, int chanid, int flags, int size,
+                         struct stream *s, int total_size)
+{
+    int type;
+    int status;
+    int length;
+    int clip_bytes;
+    int index;
+    int format;
+    struct stream *out_s;
+
+    if (chanid == v->clip_chanid)
+    {
+        in_uint16_le(s, type);
+        in_uint16_le(s, status);
+        in_uint32_le(s, length);
+
+        LOG(LOG_LEVEL_DEBUG, "clip data type %d status %d length %d", type, status, length);
+        LOG_DEVEL_HEXDUMP(LOG_LEVEL_TRACE, "clipboard data", s->p, s->end - s->p);
+        switch (type)
+        {
+            case 2: /* CLIPRDR_FORMAT_ANNOUNCE */
+                LOG(LOG_LEVEL_DEBUG, "CLIPRDR_FORMAT_ANNOUNCE - "
+                    "status %d length %d", status, length);
+                make_stream(out_s);
+                init_stream(out_s, 8192);
+                out_uint16_le(out_s, 3); // msg-type:  CLIPRDR_FORMAT_ACK
+                out_uint16_le(out_s, 1); // msg-status-code:  CLIPRDR_RESPONSE
+                out_uint32_le(out_s, 0); // null (?)
+                out_uint8s(out_s, 4);    // pad
+                s_mark_end(out_s);
+                length = (int)(out_s->end - out_s->data);
+                v->server_send_to_channel(v, v->clip_chanid, out_s->data,
+                                          length, length, 3);
+                free_stream(out_s);
+#if 0
+                // Send the CLIPRDR_DATA_REQUEST message to the cliprdr channel.
+                //
+                make_stream(out_s);
+                init_stream(out_s, 8192);
+                out_uint16_le(out_s, 4); // msg-type:  CLIPRDR_DATA_REQUEST
+                out_uint16_le(out_s, 0); // msg-status-code:  CLIPRDR_REQUEST
+                out_uint32_le(out_s, 4); // sizeof supported-format-list.
+                out_uint32_le(out_s, 1); // supported-format-list:  CF_TEXT
+                out_uint8s(out_s, 0);    // pad (garbage pad?)
+                s_mark_end(out_s);
+                length = (int)(out_s->end - out_s->data);
+                v->server_send_to_channel(v, v->clip_chanid, out_s->data,
+                                          length, length, 3);
+                free_stream(out_s);
+#endif
+                break;
+
+            case 3: /* CLIPRDR_FORMAT_ACK */
+                LOG(LOG_LEVEL_DEBUG, "CLIPRDR_FORMAT_ACK - "
+                    "status %d length %d", status, length);
+                break;
+            case 4: /* CLIPRDR_DATA_REQUEST */
+                LOG(LOG_LEVEL_DEBUG, "CLIPRDR_DATA_REQUEST - "
+                    "status %d length %d", status, length);
+                format = 0;
+
+                if (length >= 4)
+                {
+                    in_uint32_le(s, format);
+                }
+
+                /* only support CF_TEXT and CF_UNICODETEXT */
+                if ((format != 1) && (format != 13))
+                {
+                    break;
+                }
+
+                make_stream(out_s);
+                init_stream(out_s, 8192);
+                out_uint16_le(out_s, 5);
+                out_uint16_le(out_s, 1);
+
+                if (format == 13) /* CF_UNICODETEXT */
+                {
+                    out_uint32_le(out_s, v->clip_data_s->size * 2 + 2);
+
+                    for (index = 0; index < v->clip_data_s->size; index++)
+                    {
+                        out_uint8(out_s, v->clip_data_s->data[index]);
+                        out_uint8(out_s, 0);
+                    }
+
+                    out_uint8s(out_s, 2);
+                }
+                else if (format == 1) /* CF_TEXT */
+                {
+                    out_uint32_le(out_s, v->clip_data_s->size + 1);
+
+                    for (index = 0; index < v->clip_data_s->size; index++)
+                    {
+                        out_uint8(out_s, v->clip_data_s->data[index]);
+                    }
+
+                    out_uint8s(out_s, 1);
+                }
+
+                out_uint8s(out_s, 4); /* pad */
+                s_mark_end(out_s);
+                length = (int)(out_s->end - out_s->data);
+                v->server_send_to_channel(v, v->clip_chanid, out_s->data, length,
+                                          length, 3);
+                free_stream(out_s);
+                break;
+
+            case 5: /* CLIPRDR_DATA_RESPONSE */
+                LOG(LOG_LEVEL_DEBUG, "CLIPRDR_DATA_RESPONSE - "
+                    "status %d length %d", status, length);
+                clip_bytes = MIN(length, 256);
+                // - Read the response data from the cliprdr channel, stream 's'.
+                // - Send the response data to the vnc server, stream 'out_s'.
+                //
+                make_stream(out_s);
+                // Send the RFB message type (CLIENT_CUT_TEXT) to the vnc server.
+                init_stream(out_s, clip_bytes + 1 + 3 + 4 + 16);
+                out_uint8(out_s, C2S_CLIENT_CUT_TEXT);
+                out_uint8s(out_s, 3);  // padding
+                // Send the length of the cut-text to  the vnc server.
+                out_uint32_be(out_s, clip_bytes);
+                // Send the cut-text (as read from 's') to the vnc server.
+                for (index = 0; index < clip_bytes; index++)
+                {
+                    char cur_char = '\0';
+                    in_uint8(s, cur_char);      // text in from 's'
+                    out_uint8(out_s, cur_char); // text out to 'out_s'
+                }
+                s_mark_end(out_s);
+                lib_send_copy(v, out_s);
+                free_stream(out_s);
+                break;
+
+            default:
+            {
+                LOG(LOG_LEVEL_DEBUG, "VNC clip information unhandled");
+                break;
+            }
+        }
+    }
+    else
+    {
+        LOG(LOG_LEVEL_DEBUG, "lib_process_channel_data: unknown chanid: "
+            "%d :(v->clip_chanid) %d", chanid, v->clip_chanid);
+    }
+
+    return 0;
 }
 
 /**************************************************************************//**
@@ -425,7 +693,7 @@ resize_client(struct vnc *v, int update_in_progress, int width, int height)
  *
  * This has some limitations. We have no way to move multiple screens about
  * on a connected client, and so we are not able to change the client unless
- * we're changing to a single screen layout.
+ * we're changing to a single screeen layout.
  */
 static int
 resize_client_from_layout(struct vnc *v,
@@ -465,13 +733,176 @@ resize_client_from_layout(struct vnc *v,
     return error;
 }
 
+static int sendVncKey(struct vnc *v, uint32_t vncKeyCode, int pressed)
+{
+  struct stream *s;
+  int error;
+  LOG(LOG_LEVEL_DEBUG, "send vnc key 0x%04x %d\n", vncKeyCode, pressed);
+  make_stream(s);
+  init_stream(s, 8192);
+  out_uint8(s, C2S_KEY_EVENT);
+  out_uint8(s, pressed?1:0); /* down flag */
+  out_uint8s(s, 2);
+  out_uint32_be(s, vncKeyCode);
+  s_mark_end(s);
+  error = lib_send_copy(v, s);
+  return error;
+}
+
+/* translate vncKey into X11 key sym to send to vnc server */
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+static uint32_t translateVncKeyToX11KeySym(
+  const struct x11vnckey* const vncKey,
+  const int shiftIsDown,
+  const int capsLocked,
+  const int numLocked)
+{
+  const int capsLockable=keyIsCapsLockable(vncKey);
+  const int numLockable=keyIsNumLockable(vncKey);
+  LOG(LOG_LEVEL_DEBUG, "translate vnc key capslockable %d, numlockable %d, shift %d, capslock %d, numlock %d\n", capsLockable, numLockable, shiftIsDown, capsLocked, numLocked);
+  
+  if (capsLockable){
+    return ((shiftIsDown && !capsLocked) || (!shiftIsDown && capsLocked))?
+      vncKey->shiftedVncKeyCode:
+      vncKey->vncKeyCode;
+  }
+  if (numLockable){
+    return ((shiftIsDown && !numLocked) || (!shiftIsDown && numLocked))?
+      vncKey->shiftedVncKeyCode:
+      vncKey->vncKeyCode;
+  }
+  return shiftIsDown?
+    vncKey->shiftedVncKeyCode:
+    vncKey->vncKeyCode;
+}
+
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+/* returns 0 for success */
+static int handleVncKeyPress(struct x11vnc* const v,
+                             struct x11vnckey* const vncKey)
+{
+  const struct x11vnckey* keys=v->keys;
+  const int shiftIsDown =
+    (keys[42].attrs & X11_VNC_KEY_IS_DOWN) ||
+    (keys[54].attrs & X11_VNC_KEY_IS_DOWN);
+  uint32_t x11keySym=translateVncKeyToX11KeySym(
+    vncKey,shiftIsDown,v->capsLocked,v->numLocked);
+  int status=0;
+
+  LOG(LOG_LEVEL_DEBUG, "handle vnc key 0x%04x press (shift %d, caps lock %d, num lock %d)\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
+    
+  if (keyAutoRepeats(vncKey))
+  {
+    // rdp sends repeated key-down with no intervening key-up for
+    // auto-repeat, so for keys we want to auto-repeat, we ignore
+    // rdp key-up and instead generate a down-up pair for each rdp key-down
+    // this way auto-repeat does not depend on network latency
+    status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
+    if (status == 0){
+      status=sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
+    }
+  }
+  else
+  {
+    // for non-autorepeat keys, ignore rdp's repeated key-downs with
+    // no intervening key-up
+    if (!keyIsDown(vncKey))
+    {
+      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_PRESSED);
+      if (status == 0){
+        setKeyDown(vncKey);
+      }
+    }
+  }
+  return status;
+}
+
+/* pre: vncKey->attrs & X11_VNC_KEY_VALID */
+/* returns 0 for success */
+static int handleVncKeyRelease(struct x11vnc* const v,
+                               struct x11vnckey* const vncKey)
+{
+  const struct x11vnckey* keys=v->keys;
+  const int shiftIsDown =
+    (keys[42].attrs & X11_VNC_KEY_IS_DOWN) ||
+    (keys[54].attrs & X11_VNC_KEY_IS_DOWN);
+  uint32_t x11keySym=translateVncKeyToX11KeySym(
+    vncKey,shiftIsDown,v->capsLocked,v->numLocked);
+  int status=0;
+
+  LOG(LOG_LEVEL_DEBUG, "handle vnc key 0x%04x release (shift %d, caps lock %d, num lock %d\n", x11keySym, shiftIsDown, v->capsLocked, v->numLocked);
+    
+  if (keyIsCapsLock(vncKey))
+  {
+    v->capsLocked=!v->capsLocked;
+  }
+  if (keyIsNumLock(vncKey))
+  {
+    v->numLocked=!v->numLocked;
+  }
+
+  if (keyAutoRepeats(vncKey))
+  {
+    // rdp sends repeated key-down with no intervening key-up for
+    // auto-repeat, so for keys we want to auto-repeat, we ignore
+    // rdp key-up and instead generate a down-up pair for each rdp key-down
+    // this way auto-repeat does not depend on network latency
+  }
+  else
+  {
+    // for non-autorepeat keys, ignore rdp's repeated key-downs with
+    // no intervening key-up
+    if (keyIsDown(vncKey))
+    {
+      status = sendVncKey(&v->_, x11keySym, X11_VNC_KEY_RELEASED);
+      if (status == 0){
+        setKeyUp(vncKey);
+      }
+    }
+  }
+  return status;
+}
+
+int lib_mod_handle_key(struct vnc *v_, int rdpKeyCode, int rdpKeyEvent)
+{
+  struct x11vnc* const v=(struct x11vnc*)v_;
+  int status=0;
+  const X11VncKeyDirection direction = (rdpKeyEvent & 0x8000 ?
+                                        X11_VNC_KEY_RELEASED :
+                                        X11_VNC_KEY_PRESSED);
+  LOG(LOG_LEVEL_DEBUG, "handle rdp key %d event %d\n", rdpKeyCode, rdpKeyEvent);
+  if (rdpKeyCode >= 256)
+  {
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d (>= 256) is invalid for xrdp x11vnc module", rdpKeyCode);
+    return 0;
+  }
+  if (rdpKeyCode < 0)
+  {
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d (< 0) is invalid for xrdp x11vnc module", rdpKeyCode);
+    return 0;
+  }
+  const int index=(rdpKeyEvent&0x100 ? 256:0)+rdpKeyCode;
+  if (! (v->keys[index].attrs & X11_VNC_KEY_VALID))
+  {
+    LOG(LOG_LEVEL_DEBUG, "rdp key code %d event %d is not mapped by xrdp x11vnc module", rdpKeyCode, rdpKeyEvent);
+    return 0;
+  }
+  if (direction==X11_VNC_KEY_PRESSED){
+    status = handleVncKeyPress(v, &v->keys[index]);
+  }
+  else{
+    status = handleVncKeyRelease(v, &v->keys[index]);
+  }  
+  return status;
+}
+
+
 /*****************************************************************************/
 int
 lib_mod_event(struct vnc *v, int msg, long param1, long param2,
               long param3, long param4)
 {
     struct stream *s;
-    int key;
     int error;
     int x;
     int y;
@@ -496,16 +927,11 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
 
         if ((size >= 0) && (size <= (32 * 1024)) && (data != 0))
         {
-            if (chanid == v->clip_chanid)
-            {
-                error = vnc_clip_process_channel_data(v, data, size,
-                                                      total_size, flags);
-            }
-            else
-            {
-                LOG(LOG_LEVEL_DEBUG, "lib_process_channel_data: unknown chanid: "
-                    "%d :(v->clip_chanid) %d", chanid, v->clip_chanid);
-            }
+            init_stream(s, size);
+            out_uint8a(s, data, size);
+            s_mark_end(s);
+            s->p = s->data;
+            error = lib_process_channel_data(v, chanid, flags, size, s, total_size);
         }
         else
         {
@@ -514,102 +940,48 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
     }
     else if ((msg >= 15) && (msg <= 16)) /* key events */
     {
-        key = param2;
-
-        if (key > 0)
-        {
-            if (key == 65027) /* altgr */
-            {
-                if (v->shift_state)
-                {
-                    /* fix for mstsc sending left control down with altgr */
-                    init_stream(s, 8192);
-                    out_uint8(s, RFB_C2S_KEY_EVENT);
-                    out_uint8(s, 0); /* down flag */
-                    out_uint8s(s, 2);
-                    out_uint32_be(s, 65507); /* left control */
-                    s_mark_end(s);
-                    lib_send_copy(v, s);
-                }
-            }
-
-            init_stream(s, 8192);
-            out_uint8(s, RFB_C2S_KEY_EVENT);
-            out_uint8(s, msg == 15); /* down flag */
-            out_uint8s(s, 2);
-            out_uint32_be(s, key);
-            s_mark_end(s);
-            error = lib_send_copy(v, s);
-
-            if (key == 65507) /* left control */
-            {
-                v->shift_state = msg == 15;
-            }
-        }
+      // see lib_mod_handle_key
     }
-    /* mouse events
-     *
-     * VNC supports up to 8 mouse buttons because mouse buttons are
-     * represented by 7 bits bitmask
-     */
-    else if (msg >= WM_MOUSEMOVE && msg <= WM_BUTTON8DOWN) /* 100 to 116 */
+    else if (msg >= 100 && msg <= 110) /* mouse events */
     {
         switch (msg)
         {
-            case WM_MOUSEMOVE:
-                break;
-            case WM_LBUTTONUP:
+            case 100:
+                break; /* WM_MOUSEMOVE */
+            case 101:
                 v->mod_mouse_state &= ~1;
-                break;
-            case WM_LBUTTONDOWN:
+                break; /* WM_LBUTTONUP */
+            case 102:
                 v->mod_mouse_state |= 1;
-                break;
-            case WM_RBUTTONUP:
+                break; /* WM_LBUTTONDOWN */
+            case 103:
                 v->mod_mouse_state &= ~4;
-                break;
-            case WM_RBUTTONDOWN:
+                break; /* WM_RBUTTONUP */
+            case 104:
                 v->mod_mouse_state |= 4;
-                break;
-            case WM_BUTTON3UP:
+                break; /* WM_RBUTTONDOWN */
+            case 105:
                 v->mod_mouse_state &= ~2;
                 break;
-            case WM_BUTTON3DOWN:
+            case 106:
                 v->mod_mouse_state |= 2;
                 break;
-            case WM_BUTTON4UP:
+            case 107:
                 v->mod_mouse_state &= ~8;
                 break;
-            case WM_BUTTON4DOWN:
+            case 108:
                 v->mod_mouse_state |= 8;
                 break;
-            case WM_BUTTON5UP:
+            case 109:
                 v->mod_mouse_state &= ~16;
                 break;
-            case WM_BUTTON5DOWN:
+            case 110:
                 v->mod_mouse_state |= 16;
-                break;
-            case WM_BUTTON6UP:
-                v->mod_mouse_state &= ~32;
-                break;
-            case WM_BUTTON6DOWN:
-                v->mod_mouse_state |= 32;
-                break;
-            case WM_BUTTON7UP:
-                v->mod_mouse_state &= ~64;
-                break;
-            case WM_BUTTON7DOWN:
-                v->mod_mouse_state |= 64;
-                break;
-            case WM_BUTTON8UP:
-                v->mod_mouse_state &= ~128;
-                break;
-            case WM_BUTTON8DOWN:
-                v->mod_mouse_state |= 128;
                 break;
         }
 
         init_stream(s, 8192);
-        out_uint8(s, RFB_C2S_POINTER_EVENT);
+        out_uint8(s, C2S_POINTER_EVENT);
         out_uint8(s, v->mod_mouse_state);
         out_uint16_be(s, param1);
         out_uint16_be(s, param2);
@@ -621,7 +993,7 @@ lib_mod_event(struct vnc *v, int msg, long param1, long param2,
         if (v->suppress_output == 0)
         {
             init_stream(s, 8192);
-            out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+            out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
             out_uint8(s, 0); /* incremental == 0 : Full contents */
             x = (param1 >> 16) & 0xffff;
             out_uint16_be(s, x);
@@ -847,22 +1219,15 @@ get_bytes_per_pixel(int bpp)
  * @param bytes Bytes to skip
  * @return != 0 for error
  */
-int
-skip_trans_bytes(struct trans *trans, unsigned int bytes)
+static int
+skip_trans_bytes(struct trans *trans, int bytes)
 {
     struct stream *s;
-    int error = 0;
+    int error;
 
     make_stream(s);
-
-    while (error == 0 && bytes > 0)
-    {
-        int chunk_size = MIN(32768, bytes);
-        init_stream(s, chunk_size);
-        error = trans_force_read_s(trans, s, chunk_size);
-        bytes -= chunk_size;
-    }
-
+    init_stream(s, bytes);
+    error = trans_force_read_s(trans, s, bytes);
     free_stream(s);
 
     return error;
@@ -890,40 +1255,40 @@ skip_encoding(struct vnc *v, int x, int y, int cx, int cy,
 
     switch (encoding)
     {
-        case RFB_ENC_RAW:
+        case ENC_RAW:
         {
             int need_size = cx * cy * get_bytes_per_pixel(v->server_bpp);
-            LOG(LOG_LEVEL_DEBUG, "Skipping RFB_ENC_RAW encoding");
+            LOG(LOG_LEVEL_DEBUG, "Skipping ENC_RAW encoding");
             error = skip_trans_bytes(v->trans, need_size);
         }
         break;
 
-        case RFB_ENC_COPY_RECT:
+        case ENC_COPY_RECT:
         {
-            LOG(LOG_LEVEL_DEBUG, "Skipping RFB_ENC_COPY_RECT encoding");
+            LOG(LOG_LEVEL_DEBUG, "Skipping ENC_COPY_RECT encoding");
             error = skip_trans_bytes(v->trans, 4);
         }
         break;
 
-        case RFB_ENC_CURSOR:
+        case ENC_CURSOR:
         {
             int j = cx * cy * get_bytes_per_pixel(v->server_bpp);
             int k = ((cx + 7) / 8) * cy;
 
-            LOG(LOG_LEVEL_DEBUG, "Skipping RFB_ENC_CURSOR encoding");
+            LOG(LOG_LEVEL_DEBUG, "Skipping ENC_CURSOR encoding");
             error = skip_trans_bytes(v->trans, j + k);
         }
         break;
 
-        case RFB_ENC_DESKTOP_SIZE:
-            LOG(LOG_LEVEL_DEBUG, "Skipping RFB_ENC_DESKTOP_SIZE encoding");
+        case ENC_DESKTOP_SIZE:
+            LOG(LOG_LEVEL_DEBUG, "Skipping ENC_DESKTOP_SIZE encoding");
             break;
 
-        case RFB_ENC_EXTENDED_DESKTOP_SIZE:
+        case ENC_EXTENDED_DESKTOP_SIZE:
         {
             struct vnc_screen_layout layout = {0};
             LOG(LOG_LEVEL_DEBUG,
-                "Skipping RFB_ENC_EXTENDED_DESKTOP_SIZE encoding "
+                "Skipping ENC_EXTENDED_DESKTOP_SIZE encoding "
                 "x=%d, y=%d geom=%dx%d",
                 x, y, cx, cy);
             error = read_extended_desktop_size_rect(v, &layout);
@@ -1001,7 +1366,7 @@ find_matching_extended_rect(struct vnc *v,
                 in_uint16_be(s, cy);
                 in_uint32_be(s, encoding);
 
-                if (encoding == RFB_ENC_EXTENDED_DESKTOP_SIZE &&
+                if (encoding == ENC_EXTENDED_DESKTOP_SIZE &&
                         match_layout->s == NULL &&
                         match(x, y, cx, cy))
                 {
@@ -1029,8 +1394,6 @@ find_matching_extended_rect(struct vnc *v,
             }
         }
     }
-
-    free_stream(s);
 
     return error;
 }
@@ -1068,7 +1431,7 @@ send_update_request_for_resize_status(struct vnc *v)
             /*
              * Ask for an immediate, minimal update.
              */
-            out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+            out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
             out_uint8(s, 0); /* incremental == 0 : Full update */
             out_uint16_be(s, 0);
             out_uint16_be(s, 0);
@@ -1082,7 +1445,7 @@ send_update_request_for_resize_status(struct vnc *v)
             /*
              * Ask for a deferred minimal update.
              */
-            out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+            out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
             out_uint8(s, 1); /* incremental == 1 : Changes only */
             out_uint16_be(s, 0);
             out_uint16_be(s, 0);
@@ -1098,7 +1461,7 @@ send_update_request_for_resize_status(struct vnc *v)
              */
             if (v->suppress_output == 0)
             {
-                out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+                out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
                 out_uint8(s, 0); /* incremental == 0 : Full update */
                 out_uint16_be(s, 0);
                 out_uint16_be(s, 0);
@@ -1133,6 +1496,20 @@ static int
 rect_is_reply_to_us(int x, int y, int cx, int cy)
 {
     return (x == 1);
+}
+
+/**************************************************************************//**
+ * Returns an error string for an ExtendedDesktopSize status code
+ */
+static const char *
+get_eds_status_msg(unsigned int response_code)
+{
+    if (response_code >= EDS_STATUS_MSG_COUNT)
+    {
+        response_code = EDS_STATUS_MSG_COUNT - 1;
+    }
+
+    return eds_status_msg[response_code];
 }
 
 /**************************************************************************//**
@@ -1234,7 +1611,7 @@ lib_framebuffer_waiting_for_resize_confirm(struct vnc *v)
 {
     int error;
     struct vnc_screen_layout layout = {0};
-    int response_code = 0;
+    int response_code;
 
     error = find_matching_extended_rect(v,
                                         rect_is_reply_to_us,
@@ -1255,7 +1632,7 @@ lib_framebuffer_waiting_for_resize_confirm(struct vnc *v)
                 LOG(LOG_LEVEL_WARNING,
                     "VNC server resize failed - error code %d [%s]",
                     response_code,
-                    rfb_get_eds_status_msg(response_code));
+                    get_eds_status_msg(response_code));
                 /* Force client to same size as server */
                 LOG(LOG_LEVEL_WARNING, "Resizing client to server %dx%d",
                     v->server_width, v->server_height);
@@ -1338,7 +1715,7 @@ lib_framebuffer_update(struct vnc *v)
             in_uint16_be(s, cy);
             in_uint32_be(s, encoding);
 
-            if (encoding == RFB_ENC_RAW)
+            if (encoding == ENC_RAW)
             {
                 need_size = cx * cy * get_bytes_per_pixel(v->server_bpp);
                 init_stream(pixel_s, need_size);
@@ -1349,7 +1726,7 @@ lib_framebuffer_update(struct vnc *v)
                     error = v->server_paint_rect(v, x, y, cx, cy, pixel_s->data, cx, cy, 0, 0);
                 }
             }
-            else if (encoding == RFB_ENC_COPY_RECT)
+            else if (encoding == ENC_COPY_RECT)
             {
                 init_stream(s, 8192);
                 error = trans_force_read_s(v->trans, s, 4);
@@ -1361,7 +1738,7 @@ lib_framebuffer_update(struct vnc *v)
                     error = v->server_screen_blt(v, x, y, cx, cy, srcx, srcy);
                 }
             }
-            else if (encoding == RFB_ENC_CURSOR)
+            else if (encoding == ENC_CURSOR)
             {
                 g_memset(cursor_data, 0, 32 * (32 * 3));
                 g_memset(cursor_mask, 0, 32 * (32 / 8));
@@ -1406,14 +1783,14 @@ lib_framebuffer_update(struct vnc *v)
                     error = v->server_set_cursor(v, x, y, cursor_data, cursor_mask);
                 }
             }
-            else if (encoding == RFB_ENC_DESKTOP_SIZE)
+            else if (encoding == ENC_DESKTOP_SIZE)
             {
                 /* Server end has resized */
                 v->server_width = cx;
                 v->server_height = cy;
                 error = resize_client(v, 1, cx, cy);
             }
-            else if (encoding == RFB_ENC_EXTENDED_DESKTOP_SIZE)
+            else if (encoding == ENC_EXTENDED_DESKTOP_SIZE)
             {
                 layout.total_width = cx;
                 layout.total_height = cy;
@@ -1446,7 +1823,7 @@ lib_framebuffer_update(struct vnc *v)
         if (v->suppress_output == 0)
         {
             init_stream(s, 8192);
-            out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+            out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
             out_uint8(s, 1); /* incremental == 1 : Changes only */
             out_uint16_be(s, 0);
             out_uint16_be(s, 0);
@@ -1459,6 +1836,57 @@ lib_framebuffer_update(struct vnc *v)
 
     free_stream(s);
     free_stream(pixel_s);
+    return error;
+}
+
+/******************************************************************************/
+/* clip data from the vnc server */
+int
+lib_clip_data(struct vnc *v)
+{
+    struct stream *s;
+    struct stream *out_s;
+    int size;
+    int error;
+
+    free_stream(v->clip_data_s);
+    v->clip_data_s = 0;
+    make_stream(s);
+    init_stream(s, 8192);
+    error = trans_force_read_s(v->trans, s, 7);
+
+    if (error == 0)
+    {
+        in_uint8s(s, 3);
+        in_uint32_be(s, size);
+        make_stream(v->clip_data_s);
+        init_stream(v->clip_data_s, size);
+        error = trans_force_read_s(v->trans, v->clip_data_s, size);
+    }
+
+    if (error == 0)
+    {
+        make_stream(out_s);
+        init_stream(out_s, 8192);
+        out_uint16_le(out_s, 2);
+        out_uint16_le(out_s, 0);
+        out_uint32_le(out_s, 0x90);
+        out_uint8(out_s, 0x0d);
+        out_uint8s(out_s, 35);
+        out_uint8(out_s, 0x10);
+        out_uint8s(out_s, 35);
+        out_uint8(out_s, 0x01);
+        out_uint8s(out_s, 35);
+        out_uint8(out_s, 0x07);
+        out_uint8s(out_s, 35);
+        out_uint8s(out_s, 4);
+        s_mark_end(out_s);
+        size = (int)(out_s->end - out_s->data);
+        error = v->server_send_to_channel(v, v->clip_chanid, out_s->data, size, size, 3);
+        free_stream(out_s);
+    }
+
+    free_stream(s);
     return error;
 }
 
@@ -1548,7 +1976,7 @@ lib_mod_process_message(struct vnc *v, struct stream *s)
     error = 0;
     if (error == 0)
     {
-        if (type == RFB_S2C_FRAMEBUFFER_UPDATE)
+        if (type == S2C_FRAMEBUFFER_UPDATE)
         {
             switch (v->resize_status)
             {
@@ -1564,18 +1992,18 @@ lib_mod_process_message(struct vnc *v, struct stream *s)
                     error = lib_framebuffer_update(v);
             }
         }
-        else if (type == RFB_S2C_SET_COLOUR_MAP_ENTRIES)
+        else if (type == S2C_SET_COLOUR_MAP_ENTRIES)
         {
             error = lib_palette_update(v);
         }
-        else if (type == RFB_S2C_BELL)
+        else if (type == S2C_BELL)
         {
             error = lib_bell_trigger(v);
         }
-        else if (type == RFB_S2C_SERVER_CUT_TEXT) /* clipboard */
+        else if (type == S2C_SERVER_CUT_TEXT) /* clipboard */
         {
             LOG(LOG_LEVEL_DEBUG, "VNC got clip data");
-            error = vnc_clip_process_rfb_data(v);
+            error = lib_clip_data(v);
         }
         else
         {
@@ -1596,6 +2024,22 @@ lib_mod_start(struct vnc *v, int w, int h, int bpp)
     v->server_fill_rect(v, 0, 0, w, h);
     v->server_end_update(v);
     v->server_bpp = bpp;
+    return 0;
+}
+
+/******************************************************************************/
+static int
+lib_open_clip_channel(struct vnc *v)
+{
+    char init_data[12] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    v->clip_chanid = v->server_get_channel_id(v, "cliprdr");
+
+    if (v->clip_chanid >= 0)
+    {
+        v->server_send_to_channel(v, v->clip_chanid, init_data, 12, 12, 3);
+    }
+
     return 0;
 }
 
@@ -1741,10 +2185,10 @@ lib_mod_connect(struct vnc *v)
                 if (error == 0)
                 {
                     init_stream(s, 8192);
-                    if (guid_is_set(&v->guid))
+                    if (v->got_guid)
                     {
-                        char guid_str[GUID_STR_SIZE];
-                        guid_to_str(&v->guid, guid_str);
+                        char guid_str[64];
+                        g_bytes_to_hexstr(v->guid, 16, guid_str, 64);
                         rfbHashEncryptBytes(s->data, guid_str);
                     }
                     else
@@ -1874,7 +2318,7 @@ lib_mod_connect(struct vnc *v)
     if (error == 0)
     {
         init_stream(s, 8192);
-        out_uint8(s, RFB_C2S_SET_PIXEL_FORMAT);
+        out_uint8(s, C2S_SET_PIXEL_FORMAT);
         out_uint8(s, 0);
         out_uint8(s, 0);
         out_uint8(s, 0);
@@ -1966,13 +2410,13 @@ lib_mod_connect(struct vnc *v)
         unsigned int i;
 
         /* These encodings are always supported */
-        e[n++] = RFB_ENC_RAW;
-        e[n++] = RFB_ENC_COPY_RECT;
-        e[n++] = RFB_ENC_CURSOR;
-        e[n++] = RFB_ENC_DESKTOP_SIZE;
+        e[n++] = ENC_RAW;
+        e[n++] = ENC_COPY_RECT;
+        e[n++] = ENC_CURSOR;
+        e[n++] = ENC_DESKTOP_SIZE;
         if (v->enabled_encodings_mask & MSK_EXTENDED_DESKTOP_SIZE)
         {
-            e[n++] = RFB_ENC_EXTENDED_DESKTOP_SIZE;
+            e[n++] = ENC_EXTENDED_DESKTOP_SIZE;
         }
         else
         {
@@ -1981,7 +2425,7 @@ lib_mod_connect(struct vnc *v)
         }
 
         init_stream(s, 8192);
-        out_uint8(s, RFB_C2S_SET_ENCODINGS);
+        out_uint8(s, C2S_SET_ENCODINGS);
         out_uint8(s, 0);
         out_uint16_be(s, n); /* Number of encodings following */
         for (i = 0 ; i < n; ++i)
@@ -2016,7 +2460,7 @@ lib_mod_connect(struct vnc *v)
     if (error == 0)
     {
         v->server_msg(v, "VNC connection complete, connected ok", 0);
-        vnc_clip_open_clip_channel(v);
+        lib_open_clip_channel(v);
     }
     else
     {
@@ -2049,6 +2493,7 @@ lib_mod_end(struct vnc *v)
     {
     }
 
+    free_stream(v->clip_data_s);
     return 0;
 }
 
@@ -2062,25 +2507,25 @@ static void
 init_client_layout(struct vnc_screen_layout *layout,
                    const struct xrdp_client_info *client_info)
 {
-    uint32_t i;
+    int i;
 
-    layout->total_width = client_info->display_sizes.session_width;
-    layout->total_height = client_info->display_sizes.session_height;
+    layout->total_width = client_info->width;
+    layout->total_height = client_info->height;
 
-    layout->count = client_info->display_sizes.monitorCount;
+    layout->count = client_info->monitorCount;
     layout->s = g_new(struct vnc_screen, layout->count);
 
-    for (i = 0 ; i < client_info->display_sizes.monitorCount ; ++i)
+    for (i = 0 ; i < client_info->monitorCount ; ++i)
     {
         /* Use minfo_wm, as this is normalised for a top-left of (0,0)
          * as required by RFC6143 */
         layout->s[i].id = i;
-        layout->s[i].x = client_info->display_sizes.minfo_wm[i].left;
-        layout->s[i].y = client_info->display_sizes.minfo_wm[i].top;
-        layout->s[i].width =  client_info->display_sizes.minfo_wm[i].right -
-                              client_info->display_sizes.minfo_wm[i].left + 1;
-        layout->s[i].height = client_info->display_sizes.minfo_wm[i].bottom -
-                              client_info->display_sizes.minfo_wm[i].top + 1;
+        layout->s[i].x = client_info->minfo_wm[i].left;
+        layout->s[i].y = client_info->minfo_wm[i].top;
+        layout->s[i].width =  client_info->minfo_wm[i].right -
+                              client_info->minfo_wm[i].left + 1;
+        layout->s[i].height = client_info->minfo_wm[i].bottom -
+                              client_info->minfo_wm[i].top + 1;
         layout->s[i].flags = 0;
     }
 }
@@ -2115,7 +2560,8 @@ lib_mod_set_param(struct vnc *v, const char *name, const char *value)
     }
     else if (g_strcasecmp(name, "guid") == 0)
     {
-        v->guid = *(struct guid *)value;
+        v->got_guid = 1;
+        g_memcpy(v->guid, value, 16);
     }
     else if (g_strcasecmp(name, "disabled_encodings_mask") == 0)
     {
@@ -2129,11 +2575,11 @@ lib_mod_set_param(struct vnc *v, const char *name, const char *value)
         g_free(v->client_layout.s);
 
         /* Save monitor information from the client */
-        if (!client_info->multimon || client_info->display_sizes.monitorCount < 1)
+        if (!client_info->multimon || client_info->monitorCount < 1)
         {
             set_single_screen_layout(&v->client_layout,
-                                     client_info->display_sizes.session_width,
-                                     client_info->display_sizes.session_height);
+                                     client_info->width,
+                                     client_info->height);
         }
         else
         {
@@ -2207,7 +2653,7 @@ lib_mod_suppress_output(struct vnc *v, int suppress,
     {
         make_stream(s);
         init_stream(s, 8192);
-        out_uint8(s, RFB_C2S_FRAMEBUFFER_UPDATE_REQUEST);
+        out_uint8(s, C2S_FRAMEBUFFER_UPDATE_REQUEST);
         out_uint8(s, 0); /* incremental == 0 : Full contents */
         out_uint16_be(s, 0);
         out_uint16_be(s, 0);
@@ -2248,36 +2694,198 @@ lib_mod_server_monitor_full_invalidate(struct vnc *v, int param1, int param2)
     return 0;
 }
 
+static struct x11vnckey kk(int attrs, int sym, int shiftedSym)
+{
+  struct x11vnckey result;
+  result.attrs=(X11VncKeyAttrs)attrs | X11_VNC_KEY_VALID;
+  result.vncKeyCode=sym;
+  result.shiftedVncKeyCode=shiftedSym;
+  return result;
+}
 /******************************************************************************/
 tintptr EXPORT_CC
 mod_init(void)
 {
-    struct vnc *v;
+    struct x11vnc *v;
+    struct x11vnckey* keys;
 
-    v = (struct vnc *)g_malloc(sizeof(struct vnc), 1);
+    LOG(LOG_LEVEL_DEBUG, "x11vnc mod_init");
+    v = (struct x11vnc *)g_malloc(sizeof(struct x11vnc), 1);
+    LOG(LOG_LEVEL_DEBUG, "x11vnc mod_init ok");
     /* set client functions */
-    v->size = sizeof(struct vnc);
-    v->version = CURRENT_MOD_VER;
-    v->handle = (tintptr) v;
-    v->mod_connect = lib_mod_connect;
-    v->mod_start = lib_mod_start;
-    v->mod_event = lib_mod_event;
-    v->mod_signal = lib_mod_signal;
-    v->mod_end = lib_mod_end;
-    v->mod_set_param = lib_mod_set_param;
-    v->mod_get_wait_objs = lib_mod_get_wait_objs;
-    v->mod_check_wait_objs = lib_mod_check_wait_objs;
-    v->mod_frame_ack = lib_mod_frame_ack;
-    v->mod_suppress_output = lib_mod_suppress_output;
-    v->mod_server_monitor_resize = lib_mod_server_monitor_resize;
-    v->mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
-    v->mod_server_version_message = lib_mod_server_version_message;
-    v->mod_handle_key=0;
+    v->_.size = sizeof(struct x11vnc);
+    v->_.version = CURRENT_MOD_VER;
+    v->_.handle = (tintptr) v;
+    v->_.mod_connect = lib_mod_connect;
+    v->_.mod_start = lib_mod_start;
+    v->_.mod_event = lib_mod_event;
+    v->_.mod_signal = lib_mod_signal;
+    v->_.mod_end = lib_mod_end;
+    v->_.mod_set_param = lib_mod_set_param;
+    v->_.mod_get_wait_objs = lib_mod_get_wait_objs;
+    v->_.mod_check_wait_objs = lib_mod_check_wait_objs;
+    v->_.mod_frame_ack = lib_mod_frame_ack;
+    v->_.mod_suppress_output = lib_mod_suppress_output;
+    v->_.mod_server_monitor_resize = lib_mod_server_monitor_resize;
+    v->_.mod_server_monitor_full_invalidate = lib_mod_server_monitor_full_invalidate;
+    v->_.mod_server_version_message = lib_mod_server_version_message;
+    v->_.mod_handle_key = lib_mod_handle_key;
 
     /* Member variables */
-    v->enabled_encodings_mask = -1;
-    vnc_clip_init(v);
+    v->_.enabled_encodings_mask = -1;
+    bzero(&v->keys[0], sizeof(v->keys));
+    keys=&v->keys[0];
 
+    v->capsLocked = 0;
+    v->numLocked = 0;
+    
+    const int AUTOREPEAT=X11_VNC_KEY_AUTO_REPEAT;
+    const int CAPSLOCKABLE=X11_VNC_KEY_CAPS_LOCKABLE;
+    const int NUMLOCKABLE=X11_VNC_KEY_NUM_LOCKABLE;
+    const int IS_CAPSLOCK=X11_VNC_KEY_IS_CAPSLOCK;
+    const int IS_NUMLOCK=X11_VNC_KEY_IS_NUMLOCK;
+    
+    //a-z
+    keys[30] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0061, 0x0041);
+    keys[48] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0062, 0x0042);
+    keys[46] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0063, 0x0043);
+    keys[32] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0064, 0x0044);
+    keys[18] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0065, 0x0045);
+    keys[33] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0066, 0x0046);
+    keys[34] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0067, 0x0047);
+    keys[35] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0068, 0x0048);
+    keys[23] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0069, 0x0049);
+    keys[36] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006a, 0x004a);
+    keys[37] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006b, 0x004b);
+    keys[38] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006c, 0x004c);
+    keys[50] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006d, 0x004d);
+    keys[49] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006e, 0x004e);
+    keys[24] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x006f, 0x004f);
+    keys[25] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0070, 0x0050);
+    keys[16] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0071, 0x0051);
+    keys[19] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0072, 0x0052);
+    keys[31] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0073, 0x0053);
+    keys[20] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0074, 0x0054);
+    keys[22] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0075, 0x0055);
+    keys[47] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0076, 0x0056);
+    keys[17] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0077, 0x0057);
+    keys[45] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0078, 0x0058);
+    keys[21] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x0079, 0x0059);
+    keys[44] = kk(AUTOREPEAT|CAPSLOCKABLE, 0x007a, 0x005a);
+
+    // 0-9
+    keys[11] = kk(AUTOREPEAT, 0x0030, 0x0029);
+    keys[ 2] = kk(AUTOREPEAT, 0x0031, 0x0021);
+    keys[ 3] = kk(AUTOREPEAT, 0x0032, 0x0040);
+    keys[ 4] = kk(AUTOREPEAT, 0x0033, 0x0023);
+    keys[ 5] = kk(AUTOREPEAT, 0x0034, 0x0024);
+    keys[ 6] = kk(AUTOREPEAT, 0x0035, 0x0025);
+    keys[ 7] = kk(AUTOREPEAT, 0x0036, 0x005e);
+    keys[ 8] = kk(AUTOREPEAT, 0x0037, 0x0026);
+    keys[ 9] = kk(AUTOREPEAT, 0x0038, 0x002a);
+    keys[10] = kk(AUTOREPEAT, 0x0039, 0x0028);
+    // F1-F12
+    keys[59] = kk(AUTOREPEAT, 0xffbe, 0xffbe);
+    keys[60] = kk(AUTOREPEAT, 0xffbf, 0xffbf);
+    keys[61] = kk(AUTOREPEAT, 0xffc0, 0xffc0);
+    keys[62] = kk(AUTOREPEAT, 0xffc1, 0xffc1);
+    keys[63] = kk(AUTOREPEAT, 0xffc2, 0xffc2);
+    keys[64] = kk(AUTOREPEAT, 0xffc3, 0xffc3);
+    keys[65] = kk(AUTOREPEAT, 0xffc4, 0xffc4);
+    keys[66] = kk(AUTOREPEAT, 0xffc5, 0xffc5);
+    keys[67] = kk(AUTOREPEAT, 0xffc6, 0xffc6);
+    keys[68] = kk(AUTOREPEAT, 0xffc7, 0xffc7);
+    keys[87] = kk(AUTOREPEAT, 0xffc8, 0xffc8);
+    keys[88] = kk(AUTOREPEAT, 0xffc9, 0xffc9);
+    // mods
+    // shift, ctrl, alt
+    keys[42] = kk(0, 0xffe1, 0xffe1);
+    keys[29] = kk(0, 0xffe3, 0xffe3);
+    keys[56] = kk(0, 0xffe9, 0xffe9);
+
+    // right shift, ctrl, alt
+    keys[54] = kk(0, 0xffe1, 0xffe1);
+    keys[256+29] = kk(0, 0xffe3, 0xffe3);
+    keys[256+56] = kk(0, 0xffe9, 0xffe9);
+    
+    // capslock
+    keys[58] = kk(IS_CAPSLOCK, 0xffe5, 0xffe5);
+
+    // esc, tab, \,./;'[]-=`
+    keys[ 1] = kk(AUTOREPEAT, 0xff1b, 0xff1b);
+    keys[15] = kk(AUTOREPEAT, 0xff09, 0xfe20);
+    keys[43] = kk(AUTOREPEAT, 0x005c, 0x007c); // backslash
+    keys[51] = kk(AUTOREPEAT, 0x002c, 0x003c); // ,
+    keys[52] = kk(AUTOREPEAT, 0x002e, 0x003e); // .
+    keys[53] = kk(AUTOREPEAT, 0x002f, 0x003f); // /
+    keys[39] = kk(AUTOREPEAT, 0x003b, 0x003a); // ;
+    keys[40] = kk(AUTOREPEAT, 0x0027, 0x0022); // '
+    keys[26] = kk(AUTOREPEAT, 0x005b, 0x007b); // [
+    keys[27] = kk(AUTOREPEAT, 0x005d, 0x007d); // [
+    keys[12] = kk(AUTOREPEAT, 0x002d, 0x005f); // -
+    keys[13] = kk(AUTOREPEAT, 0x003d, 0x002b); // =
+    keys[41] = kk(AUTOREPEAT, 0x0060, 0x007e); // `
+
+    keys[256] = kk(AUTOREPEAT, 0xff08, 0xff08); // backspace
+    
+    // ins,del, home, end
+    keys[256+82] = kk(AUTOREPEAT, 0xff63, 0xff63); // ins
+    keys[256+83] = kk(AUTOREPEAT, 0xffff, 0xffff); // del
+    keys[256+71] = kk(AUTOREPEAT, 0xff50, 0xff50); // home
+    keys[256+79] = kk(AUTOREPEAT, 0xff57, 0xff57); // end
+
+    // back-space
+    keys[14] = kk(AUTOREPEAT, 0xff08, 0xff08);
+
+    // pgup, pgdown
+    keys[256+73] = kk(AUTOREPEAT, 0xff55, 0xff55);
+    keys[256+81] = kk(AUTOREPEAT, 0xff56, 0xff56);
+
+    // up,right,down,left
+    keys[256+72] = kk(AUTOREPEAT, 0xff52, 0xff52);
+    keys[256+77] = kk(AUTOREPEAT, 0xff53, 0xff53);
+    keys[256+80] = kk(AUTOREPEAT, 0xff54, 0xff54);
+    keys[256+75] = kk(AUTOREPEAT, 0xff51, 0xff51);
+    // num-lock, sysrq, scroll lock, break
+    keys[69] = kk(IS_NUMLOCK, 0xff7f, 0xff7f);
+    keys[70] = kk(AUTOREPEAT, 0xff15, 0xff61);
+    keys[71] = kk(AUTOREPEAT, 0xff14, 0xff14);
+    keys[72] = kk(AUTOREPEAT, 0xff6b, 0xff13);
+
+    // enter
+    keys[28] = kk(AUTOREPEAT, 0xff8d, 0xff8d);
+    
+    // kp /*-+ enter .
+    keys[256+53] = kk(AUTOREPEAT, 0x002f, 0x002f);
+    keys[55] = kk(AUTOREPEAT, 0x002a, 0x002a);
+    keys[74] = kk(AUTOREPEAT, 0x002d, 0x002d);
+    keys[78] = kk(AUTOREPEAT, 0xffab, 0xffab);
+    keys[256+28] = kk(AUTOREPEAT, 0xff8d, 0xff8d);
+    keys[83] = kk(AUTOREPEAT, 0xff9f, 0xffae);
+
+    // kp 0..9
+    keys[82] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff9e, 0xffb0);
+
+    keys[79] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff9c, 0xffb1);
+    keys[80] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff99, 0xffb2);
+    keys[81] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff9b, 0xffb3);
+
+    keys[75] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff96, 0xffb4);
+    keys[76] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff9d, 0xffb5);
+    keys[77] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff98, 0xffb6);
+    
+    keys[71] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff95, 0xffb7);
+    keys[72] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff97, 0xffb8);
+    keys[73] = kk(AUTOREPEAT|NUMLOCKABLE, 0xff9a, 0xffb9);
+
+    // space
+    keys[57] = kk(AUTOREPEAT, 0x0020, 0x0020);
+
+    // left super, right super, menu
+    keys[256+91] = kk(0, 0xffeb, 0xffeb);
+    keys[256+92] = kk(0, 0xffec, 0xffec);
+    keys[256+93] = kk(0, 0xff67, 0xff67);
+    
     return (tintptr) v;
 }
 
@@ -2294,7 +2902,6 @@ mod_exit(tintptr handle)
     }
     trans_delete(v->trans);
     g_free(v->client_layout.s);
-    vnc_clip_exit(v);
     g_free(v);
     return 0;
 }

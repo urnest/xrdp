@@ -271,6 +271,31 @@ password=ask
 #pampassword=asksame
 #delay_ms=2000
 
+; Generic VNC Proxy using x11vnc module, which is like vnc module but:
+;  - fixes vnc key handling (repeating keys when network latency is high
+;    auto repeat, caps lock, alt key sticking when eg alt+shift+, pressed)
+;  - assumes both client and server keyboards are US
+;  - only tested with Windows 10 Remote Desktop client
+;
+; To use with x11vnc give x11vnc the following parameters at least:
+;  -skip_lockkeys   ... or capslock won't work
+;  -repeat          ... or auto repeat from local xserver keyboard will stop
+;                       working
+;
+; Tailor this to specific hosts and VNC instances by specifying an ip
+; and port and setting a suitable name.
+[x11vnc-any]
+name=x11vnc-any
+lib=libx11vnc.so
+ip=asklocalhost
+port=ask5900
+username=na
+password=ask
+#pamusername=asksame
+#pampassword=asksame
+#pamsessionmng=127.0.0.1
+#delay_ms=2000
+
 ; Generic RDP proxy using NeutrinoRDP
 ; Tailor this to specific hosts by specifying an ip and port and setting
 ; a suitable name.
