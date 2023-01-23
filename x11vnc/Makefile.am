@@ -9,7 +9,12 @@ module_LTLIBRARIES = \
   libx11vnc.la
 
 libx11vnc_la_SOURCES = \
-  x11vnc.c
+  x11vnc.c \
+  vnc_clip.c \
+  rfb.c \
+  vnc.h \
+  vnc_clip.h \
+  rfb.h
 
 libx11vnc_la_LIBADD = \
   $(top_builddir)/common/libcommon.la
